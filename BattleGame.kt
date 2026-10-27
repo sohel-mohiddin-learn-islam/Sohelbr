@@ -131,6 +131,22 @@ class BattleGame : ApplicationAdapter() {
     private var msg = ""
     private var msgT = 0f
     private var nearLoot: Loot? = null
+    private var tpp = true      // third-person camera (like Free Fire); CAM button toggles
+    private var pAnim = 0f
+
+    // where the third-person camera sits: behind + over the right shoulder of the player
+    private fun tpCamPos(eye: Vector3): Vector3 {
+        val back = Vector3(cam.direction).scl(-1f)
+        val rgt = Vector3(cam.direction).crs(Vector3.Y).nor()
+        val off = Vector3(back).scl(3.4f).add(rgt.scl(0.7f)).add(0f, 0.5f, 0f)
+        val len = off.len()
+        val dirN = Vector3(off).nor()
+        val wd = wallDist(Ray(Vector3(eye), dirN), len)
+        val use = minOf(len, wd - 0.4f).coerceAtLeast(0.5f)
+        val p = Vector3(eye).add(dirN.scl(use))
+        if (p.y < 0.4f) p.y = 0.4f
+        return p
+    }
 
     private var yaw = 0f
     private var pitch = 0f
@@ -800,6 +816,9 @@ class BattleGame : ApplicationAdapter() {
         val pickX = w * 0.74f
         val pickY = h * 0.62f
         val pickR = h * 0.085f
+        val camX = w * 0.74f
+        val camY = h * 0.44f
+        val camR = h * 0.065f
 
         var mx = 0f
         var my = 0f
@@ -825,6 +844,7 @@ class BattleGame : ApplicationAdapter() {
                     firing = true
                 } else if (inCircle(x, y, reloadX, reloadY, reloadR * 1.15f) ||
                     inCircle(x, y, swapX, swapY, swapR * 1.15f) ||
+                    inCircle(x, y, camX, camY, camR * 1.15f) ||
                     (nearLoot != null && inCircle(x, y, pickX, pickY, pickR * 1.15f))) {
                     // finger is on a button, not on movement or look
                 } else if (x < w / 2f) {
@@ -882,6 +902,8 @@ class BattleGame : ApplicationAdapter() {
                     tryReload()
                 } else if (inCircle(tx, ty, swapX, swapY, swapR * 1.15f)) {
                     swapWeapon()
+                } else if (inCircle(tx, ty, camX, camY, camR * 1.15f)) {
+                    tpp = !tpp
                 } else {
                     val nl = nearLoot
                     if (nl != null && inCircle(tx, ty, pickX, pickY, pickR * 1.15f)) pickupWeapon(nl)
@@ -917,7 +939,13 @@ class BattleGame : ApplicationAdapter() {
                 cooldown = def.cd
                 flash = 0.07f
                 recoil = 1f
-                val ray = Ray(Vector3(cam.position), Vector3(cam.direction).nor())
+                val shootDir = Vector3(cam.direction).nor()
+                if (tpp) {
+                    // aim at whatever is under the crosshair of the third-person camera
+                    val tp = tpCamPos(cam.position)
+                    shootDir.set(tp.add(Vector3(cam.direction).nor().scl(80f)).sub(cam.position)).nor()
+                }
+                val ray = Ray(Vector3(cam.position), shootDir)
                 val maxD = wallDist(ray, def.range)
                 var best: Bot? = null
                 var bestDist = maxD
@@ -1052,8 +1080,30 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glViewport(0, 0, Gdx.graphics.width, Gdx.graphics.height)
         Gdx.gl.glClearColor(0.5f, 0.8f, 1f, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
+        val eyeP = Vector3(cam.position)
+        val showBody = tpp && hp > 0f && humansOk
+        if (tpp && hp > 0f) {
+            cam.position.set(tpCamPos(eyeP))
+            cam.update()
+        }
         batch.begin(cam)
         batch.render(buildings, env)
+        if (showBody) {
+            val moving = (mx * mx + my * my) > 0.04f
+            if (moving) pAnim += dt * 8f * 1.7f
+            val pf = if (flash > 0f || firing) 4 else if (moving) (pAnim.toInt() and 3) else 0
+            val pi = humans[0][0][pf]
+            if (pi != null) {
+                val py = yaw + 180f
+                pi.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, py)
+                batch.render(pi, env)
+                if (flash > 0f) {
+                    val mz = muz[0]
+                    flashInst.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, py).translate(mz[0], mz[1], mz[2])
+                    batch.render(flashInst, env)
+                }
+            }
+        }
         for (b in bots) {
             val bdx = b.pos.x - cam.position.x
             val bdz = b.pos.z - cam.position.z
@@ -1097,9 +1147,11 @@ class BattleGame : ApplicationAdapter() {
         batch.render(zoneInst, env)
         if (!shrinking && !won) batch.render(targetInst, env)
         batch.end()
+        cam.position.set(eyeP)
+        cam.update()
 
-        // ---- draw the gun in your hands (own camera, never clips into walls) ----
-        if (hp > 0f) {
+        // ---- draw the gun in your hands (first person only) ----
+        if (hp > 0f && !tpp) {
             val moving = (mx * mx + my * my) > 0.04f
             if (moving) walkT += dt * 9f
             val bobX = if (moving) sin(walkT) * 0.012f else 0f
@@ -1154,6 +1206,7 @@ class BattleGame : ApplicationAdapter() {
         shapes.circle(reloadX, h - reloadY, reloadR)
         shapes.setColor(1f, 1f, 1f, 0.25f)
         shapes.circle(swapX, h - swapY, swapR)
+        shapes.circle(camX, h - camY, camR)
         if (nl != null) {
             shapes.setColor(1f, 0.8f, 0.1f, 0.65f)
             shapes.circle(pickX, h - pickY, pickR)
@@ -1249,6 +1302,7 @@ class BattleGame : ApplicationAdapter() {
         font.data.setScale(2f)
         label("RELOAD", reloadX, h - reloadY)
         label("SWAP", swapX, h - swapY)
+        label(if (tpp) "1ST" else "3RD", camX, h - camY)
         if (nl != null) label("PICK", pickX, h - pickY)
         font.data.setScale(3f)
 
