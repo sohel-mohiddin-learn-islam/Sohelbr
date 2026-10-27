@@ -150,6 +150,10 @@ class BattleGame : ApplicationAdapter() {
     private var nearLoot: Loot? = null
     private var tpp = true      // third-person camera (like Free Fire); CAM button toggles
     private var pAnim = 0f
+    private var medkits = 0
+    private var sprint = false
+    private var jumpV = 0f
+    private var pSpeed = 7f
     private var pYaw = 180f
     private var pMoving = false
     private var pMoveYaw = 0f
@@ -643,9 +647,9 @@ class BattleGame : ApplicationAdapter() {
     private fun applyItem(l: Loot): Boolean {
         when (l.kind) {
             4 -> {
-                if (hp >= 100f) return false
-                hp = minOf(100f, hp + 50f)
-                msg = "Medkit +50 HP"
+                if (medkits >= 5) return false
+                medkits++
+                msg = "Medkit +1 (tap the + button)"
             }
             5 -> {
                 reserve = minOf(300, reserve + 40)
@@ -785,6 +789,9 @@ class BattleGame : ApplicationAdapter() {
         walkT = 0f
         nearLoot = null
         reserve = 36
+        medkits = 0
+        sprint = false
+        jumpV = 0f
         slots[0].type = 0
         slots[0].mag = weapons[0].mag
         slots[1].type = -1
@@ -976,17 +983,30 @@ class BattleGame : ApplicationAdapter() {
         val camX = w * 0.74f
         val camY = h * 0.44f
         val camR = h * 0.065f
-        // weapon boxes (top, left of the minimap) like Free Fire
-        val slotW = 170f
-        val slotH = 100f
-        val slotY = 30f
-        fun slotX(i: Int): Float = w - 345f - (2 - i) * (slotW + 12f)
+        // Free Fire style layout: weapon panel top-right, 2 small weapon boxes under it
+        val panelW = 440f
+        val panelH = 135f
+        val panelX = w - panelW - 30f
+        val panelY = 30f
+        val slotW = 140f
+        val slotH = 115f
+        val slotY = panelY + panelH + 10f
+        fun slotX(i: Int): Float = panelX + i * (slotW + 10f)
         fun slotHit(x: Float, y: Float): Int {
             for (i in 0..1) {
                 if (x >= slotX(i) && x <= slotX(i) + slotW && y >= slotY && y <= slotY + slotH) return i
             }
             return -1
         }
+        val medX = panelX - 75f
+        val medY = 100f
+        val medR = 55f
+        val runX = w * 0.21f
+        val runY = h * 0.40f
+        val runR = h * 0.07f
+        val jumpX = w * 0.93f
+        val jumpY = h * 0.91f
+        val jumpR = h * 0.065f
 
         var mx = 0f
         var my = 0f
@@ -1011,7 +1031,9 @@ class BattleGame : ApplicationAdapter() {
                 if (dfx * dfx + dfy * dfy < fireR * fireR * 2.2f) {
                     firing = true
                 } else if (inCircle(x, y, reloadX, reloadY, reloadR * 1.15f) ||
-                    inCircle(x, y, swapX, swapY, swapR * 1.15f) ||
+                    inCircle(x, y, medX, medY, medR * 1.15f) ||
+                    inCircle(x, y, runX, runY, runR * 1.15f) ||
+                    inCircle(x, y, jumpX, jumpY, jumpR * 1.15f) ||
                     inCircle(x, y, camX, camY, camR * 1.15f) ||
                     slotHit(x, y) >= 0 ||
                     (nearLoot != null && inCircle(x, y, pickX, pickY, pickR * 1.15f))) {
@@ -1029,13 +1051,22 @@ class BattleGame : ApplicationAdapter() {
 
             val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, yaw)
             val right = Vector3(fwd).crs(Vector3.Y)
-            val speed = 8f
+            val speed = if (sprint) 11f else 7f
+            pSpeed = speed
             pMoving = (mx * mx + my * my) > 0.04f
             if (pMoving) {
                 val vel = Vector3(fwd).scl(my).add(Vector3(right).scl(mx))
                 pMoveYaw = atan2(vel.x, vel.z) * 57.29578f
             }
             cam.position.add(fwd.scl(my * speed * dt)).add(right.scl(mx * speed * dt))
+            if (cam.position.y > 1.7f || jumpV != 0f) {
+                jumpV -= 18f * dt
+                cam.position.y += jumpV * dt
+                if (cam.position.y <= 1.7f) {
+                    cam.position.y = 1.7f
+                    jumpV = 0f
+                }
+            }
             cam.position.x = cam.position.x.coerceIn(-495f, 495f)
             cam.position.z = cam.position.z.coerceIn(-495f, 495f)
             collide(cam.position, 0.6f)
@@ -1074,8 +1105,17 @@ class BattleGame : ApplicationAdapter() {
                 val ty = t[1]
                 if (inCircle(tx, ty, reloadX, reloadY, reloadR * 1.15f)) {
                     tryReload()
-                } else if (inCircle(tx, ty, swapX, swapY, swapR * 1.15f)) {
-                    swapWeapon()
+                } else if (inCircle(tx, ty, medX, medY, medR * 1.15f)) {
+                    if (medkits > 0 && hp < 100f) {
+                        medkits--
+                        hp = minOf(100f, hp + 50f)
+                        msg = "Medkit used +50 HP"
+                        msgT = 1.5f
+                    }
+                } else if (inCircle(tx, ty, runX, runY, runR * 1.15f)) {
+                    sprint = !sprint
+                } else if (inCircle(tx, ty, jumpX, jumpY, jumpR * 1.15f)) {
+                    if (cam.position.y <= 1.72f) jumpV = 6.5f
                 } else if (slotHit(tx, ty) >= 0) {
                     selectSlot(slotHit(tx, ty))
                 } else if (inCircle(tx, ty, camX, camY, camR * 1.15f)) {
@@ -1312,13 +1352,13 @@ class BattleGame : ApplicationAdapter() {
         if (showBody) {
             val moving = pMoving
             val shoot = flash > 0f || firing
-            if (moving) pAnim += dt * 8f / 0.42f
+            if (moving) pAnim += dt * pSpeed / 0.42f
             val tgt = if (shoot) yaw + 180f else if (moving) pMoveYaw else pYaw
             pYaw = turnTo(pYaw, tgt, 720f * dt)
             val pf = if (shoot) (if (moving) 8 + (pAnim.toInt() and 7) else 17) else if (moving) (pAnim.toInt() and 7) else 16
             val pi = humans[0][0][pf]
             if (pi != null) {
-                pi.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, pYaw)
+                pi.transform.setToTranslation(eyeP.x, eyeP.y - 1.7f, eyeP.z).rotate(Vector3.Y, pYaw)
                 batch.render(pi, env)
                 drawCarry(Matrix4(pi.transform), 0, pf, slots[cur].type, slots[1 - cur].type, flash > 0f)
             }
@@ -1399,6 +1439,9 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
 
         val nl = nearLoot
+        val ms = 0.2f
+        val mcx = 190f
+        val mcy = h - 180f
 
         shapes.begin(ShapeRenderer.ShapeType.Filled)
         if (outside) {
@@ -1409,21 +1452,37 @@ class BattleGame : ApplicationAdapter() {
             shapes.setColor(1f, 0f, 0f, 0.15f)
             shapes.rect(0f, 0f, w, h)
         }
-        shapes.setColor(1f, 1f, 1f, 0.25f)
+        // joystick + fire
+        shapes.setColor(1f, 1f, 1f, 0.2f)
         shapes.circle(joyX, h - joyY, joyR)
-        shapes.setColor(1f, 1f, 1f, 0.5f)
+        shapes.setColor(1f, 1f, 1f, 0.45f)
         shapes.circle(knobX, h - knobY, joyR * 0.4f)
-        shapes.setColor(1f, 0.2f, 0.2f, if (firing) 0.8f else 0.45f)
+        shapes.setColor(0.1f, 0.1f, 0.12f, 0.55f)
         shapes.circle(fireX, h - fireY, fireR)
+        shapes.setColor(1f, 1f, 1f, if (firing) 1f else 0.85f)
+        shapes.circle(fireX, h - fireY, fireR * 0.55f)
+        shapes.setColor(0.9f, 0.15f, 0.15f, if (firing) 1f else 0.9f)
+        shapes.circle(fireX, h - fireY, fireR * 0.42f)
 
-        // buttons
-        if (reloading) shapes.setColor(1f, 0.6f, 0.1f, 0.6f) else shapes.setColor(1f, 1f, 1f, 0.25f)
+        // round buttons
+        shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
         shapes.circle(reloadX, h - reloadY, reloadR)
-        shapes.setColor(1f, 1f, 1f, 0.25f)
-        shapes.circle(swapX, h - swapY, swapR)
+        if (reloading) {
+            shapes.setColor(1f, 0.6f, 0.1f, 0.7f)
+            shapes.circle(reloadX, h - reloadY, reloadR * 0.8f)
+        }
+        shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
         shapes.circle(camX, h - camY, camR)
+        shapes.circle(jumpX, h - jumpY, jumpR)
+        if (sprint) shapes.setColor(1f, 0.6f, 0.1f, 0.75f) else shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
+        shapes.circle(runX, h - runY, runR)
+        shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
+        shapes.circle(medX, h - medY, medR)
+        if (medkits > 0 && hp < 100f) shapes.setColor(1f, 0.35f, 0.4f, 1f) else shapes.setColor(0.7f, 0.7f, 0.7f, 0.7f)
+        shapes.rect(medX - 24f, h - medY - 7f, 48f, 14f)
+        shapes.rect(medX - 7f, h - medY - 24f, 14f, 48f)
         if (nl != null) {
-            shapes.setColor(1f, 0.8f, 0.1f, 0.65f)
+            shapes.setColor(1f, 0.8f, 0.1f, 0.75f)
             shapes.circle(pickX, h - pickY, pickR)
         }
 
@@ -1441,35 +1500,55 @@ class BattleGame : ApplicationAdapter() {
             shapes.rectLine(cx + 26f, cy + 26f, cx + 12f, cy + 12f, 4f)
         }
 
-        // health + armor
-        shapes.setColor(0f, 0f, 0f, 0.5f)
-        shapes.rect(40f, h - 80f, 400f, 30f)
-        shapes.setColor(0.2f, 0.9f, 0.2f, 0.9f)
-        shapes.rect(40f, h - 80f, 400f * (hp.coerceAtLeast(0f) / 100f), 30f)
-        shapes.setColor(0f, 0f, 0f, 0.5f)
-        shapes.rect(40f, h - 108f, 400f, 16f)
+        // health + armor (bottom centre)
+        val hbx = w / 2f - 260f
+        shapes.setColor(0f, 0f, 0f, 0.55f)
+        shapes.rect(hbx, 40f, 520f, 26f)
+        shapes.setColor(0.95f, 0.95f, 0.95f, 0.95f)
+        shapes.rect(hbx, 40f, 520f * (hp.coerceAtLeast(0f) / 100f), 26f)
+        shapes.setColor(0f, 0f, 0f, 0.55f)
+        shapes.rect(hbx, 70f, 520f, 12f)
         shapes.setColor(0.3f, 0.6f, 1f, 0.95f)
-        shapes.rect(40f, h - 108f, 400f * (armor / 100f).coerceIn(0f, 1f), 16f)
+        shapes.rect(hbx, 70f, 520f * (armor / 100f).coerceIn(0f, 1f), 12f)
 
-        // minimap
-        val ms = 0.2f
-        val mcx = w - 180f
-        val mcy = h - 180f
-        shapes.setColor(0f, 0.15f, 0f, 0.55f)
-        shapes.rect(mcx - 150f, mcy - 150f, 300f, 300f)
-        // weapon boxes
+        // weapon panel (top-right)
+        val pby = h - panelY - panelH
+        shapes.setColor(0.06f, 0.08f, 0.13f, 0.8f)
+        shapes.rect(panelX, pby, panelW, panelH)
+        shapes.setColor(0.85f, 0.12f, 0.18f, 0.95f)
+        shapes.rect(panelX, pby, 6f, panelH)
+        val frac = if (reloading) (1f - reloadT / def.reload).coerceIn(0f, 1f) else slot.mag.toFloat() / def.mag
+        shapes.setColor(0.3f, 0.3f, 0.35f, 0.8f)
+        shapes.rect(panelX + 16f, pby + 12f, panelW - 32f, 9f)
+        shapes.setColor(1f, 1f, 1f, 0.95f)
+        shapes.rect(panelX + 16f, pby + 12f, (panelW - 32f) * frac, 9f)
+        shapes.setColor(1f, 1f, 1f, 0.95f)
+        shapes.identity()
+        shapes.translate(panelX + panelW - 130f, pby + panelH * 0.58f, 0f)
+        shapes.scale(1.25f, 1.25f, 1f)
+        gunIcon(slot.type, 0f, 0f)
+        shapes.identity()
+        // two small weapon boxes
         for (i in 0..1) {
             val bx = slotX(i)
             val by = h - slotY - slotH
             if (i == cur && slots[i].type >= 0) shapes.setColor(0.85f, 0.12f, 0.18f, 0.85f)
-            else if (slots[i].type >= 0) shapes.setColor(0f, 0f, 0f, 0.55f)
-            else shapes.setColor(0f, 0f, 0f, 0.3f)
+            else if (slots[i].type >= 0) shapes.setColor(0.06f, 0.08f, 0.13f, 0.75f)
+            else shapes.setColor(0.06f, 0.08f, 0.13f, 0.4f)
             shapes.rect(bx, by, slotW, slotH)
             if (slots[i].type >= 0) {
-                shapes.setColor(1f, 1f, 1f, if (i == cur) 1f else 0.8f)
-                gunIcon(slots[i].type, bx + slotW / 2f, by + slotH * 0.58f)
+                shapes.setColor(1f, 1f, 1f, if (i == cur) 1f else 0.85f)
+                shapes.identity()
+                shapes.translate(bx + slotW / 2f, by + slotH * 0.52f, 0f)
+                shapes.scale(0.72f, 0.72f, 1f)
+                gunIcon(slots[i].type, 0f, 0f)
+                shapes.identity()
             }
         }
+
+        // minimap (top-left)
+        shapes.setColor(0f, 0.15f, 0f, 0.55f)
+        shapes.rect(mcx - 150f, mcy - 150f, 300f, 300f)
         shapes.end()
 
         Gdx.gl.glLineWidth(3f)
@@ -1506,44 +1585,49 @@ class BattleGame : ApplicationAdapter() {
         shapes.end()
 
         sb.begin()
-        font.draw(sb, "Kills: $kills", 40f, h - 130f)
-        font.draw(sb, "Alive: ${bots.size + (if (hp > 0f) 1 else 0)}", 40f, h - 180f)
         if (!won) {
             val remaining = if (!shrinking) holdTimes[phase] - phaseTime else shrinkTimes[phase] - phaseTime
             val zlabel = if (!shrinking) "Zone ${phase + 1}/${holdTimes.size} closes in ${fmt(remaining)}"
                          else "ZONE CLOSING ${fmt(remaining)}"
-            centered(zlabel, h - 30f, w * 0.78f)
-            centered("Match time left ${fmt(1200f - matchTime)}", h - 90f, w * 0.78f)
+            centered(zlabel, h - 30f, w * 0.76f)
         }
+        font.data.setScale(2f)
+        centered("ALIVE ${bots.size + (if (hp > 0f) 1 else 0)}    KILLS $kills    ${fmt(1200f - matchTime)}", h - 95f, w * 0.76f)
+        font.data.setScale(1.4f)
+        font.draw(sb, "FPS ${Gdx.graphics.framesPerSecond}", 40f, h - 20f)
+        font.draw(sb, "HP ${hp.coerceAtLeast(0f).toInt()}/100", w / 2f - 60f, 38f)
 
-        // weapon + ammo
-        val other = slots[1 - cur]
-        var wname = def.name
-        if (other.type >= 0) wname += "   [swap: " + weapons[other.type].name + "]"
-        centered(wname, 150f, w)
-        centered(if (reloading) "RELOADING..." else "${slot.mag} / $reserve", 100f, w)
-
-        if (msgT > 0f) centered(msg, h * 0.64f, w)
-        if (nl != null) centered("Weapon: " + weapons[nl.kind].name + " - tap PICK", h * 0.34f, w)
-
-        // weapon box texts
-        font.data.setScale(1.6f)
+        // weapon panel texts
+        font.data.setScale(3.4f)
+        font.draw(sb, "${slot.mag}", panelX + 22f, h - panelY - 14f)
+        val ml = layout
+        ml.setText(font, "${slot.mag}")
+        font.data.setScale(1.7f)
+        font.draw(sb, "/ $reserve", panelX + 30f + ml.width, h - panelY - 40f)
+        font.data.setScale(1.7f)
+        font.draw(sb, if (reloading) "Reload" else def.name, panelX + 22f, h - panelY - 90f)
+        // small weapon boxes
+        font.data.setScale(1.4f)
         for (i in 0..1) {
             val bx = slotX(i)
             val by = h - slotY - slotH
             if (slots[i].type >= 0) {
-                val d = weapons[slots[i].type]
-                val t = if (i == cur) "${slots[i].mag}/$reserve" else "${slots[i].mag}"
-                label(t, bx + slotW / 2f, by + 17f)
-                label(d.name, bx + slotW / 2f, by + slotH - 14f)
+                label(weapons[slots[i].type].name, bx + slotW / 2f, by + slotH - 16f)
+                label("${slots[i].mag}", bx + slotW / 2f, by + 16f)
             } else {
                 label("EMPTY", bx + slotW / 2f, by + slotH / 2f)
             }
         }
-        font.data.setScale(2f)
+        label("x$medkits", medX + 38f, h - medY + 40f)
+
+        if (msgT > 0f) centered(msg, h * 0.64f, w)
+        if (nl != null) centered("Weapon: " + weapons[nl.kind].name + " - tap PICK", h * 0.34f, w)
+
+        font.data.setScale(1.8f)
         label("RELOAD", reloadX, h - reloadY)
-        label("SWAP", swapX, h - swapY)
         label(if (tpp) "1ST" else "3RD", camX, h - camY)
+        label("RUN", runX, h - runY)
+        label("JUMP", jumpX, h - jumpY)
         if (nl != null) label("PICK", pickX, h - pickY)
         font.data.setScale(3f)
 
