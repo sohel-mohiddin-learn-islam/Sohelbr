@@ -692,6 +692,45 @@ class BattleGame : ApplicationAdapter() {
         msgT = 1.5f
     }
 
+    private fun selectSlot(i: Int) {
+        if (i != cur && slots[i].type >= 0) {
+            cur = i
+            reloading = false
+            msg = weapons[slots[cur].type].name
+            msgT = 1.2f
+        }
+    }
+
+    // simple flat gun silhouette for the weapon boxes
+    private fun gunIcon(type: Int, cx: Float, cy: Float) {
+        when (type) {
+            0 -> {
+                shapes.rect(cx - 24f, cy - 4f, 48f, 15f)
+                shapes.rect(cx - 8f, cy - 30f, 16f, 28f)
+            }
+            1 -> {
+                shapes.rect(cx - 45f, cy - 6f, 90f, 16f)
+                shapes.rect(cx - 2f, cy - 34f, 14f, 30f)
+                shapes.rect(cx + 45f, cy - 1f, 20f, 6f)
+                shapes.rect(cx - 62f, cy - 2f, 17f, 8f)
+            }
+            2 -> {
+                shapes.rect(cx - 55f, cy - 6f, 100f, 16f)
+                shapes.rect(cx + 45f, cy - 1f, 40f, 6f)
+                shapes.rect(cx - 82f, cy - 8f, 28f, 20f)
+                shapes.rect(cx - 10f, cy - 36f, 14f, 32f)
+                shapes.rect(cx - 25f, cy + 8f, 40f, 7f)
+            }
+            3 -> {
+                shapes.rect(cx - 70f, cy - 4f, 140f, 12f)
+                shapes.rect(cx + 70f, cy - 1f, 32f, 5f)
+                shapes.rect(cx - 92f, cy - 8f, 26f, 18f)
+                shapes.rect(cx - 15f, cy + 8f, 44f, 11f)
+                shapes.rect(cx - 5f, cy - 26f, 12f, 22f)
+            }
+        }
+    }
+
     private fun swapWeapon() {
         val o = 1 - cur
         if (slots[o].type >= 0) {
@@ -937,6 +976,17 @@ class BattleGame : ApplicationAdapter() {
         val camX = w * 0.74f
         val camY = h * 0.44f
         val camR = h * 0.065f
+        // weapon boxes (top, left of the minimap) like Free Fire
+        val slotW = 170f
+        val slotH = 100f
+        val slotY = 30f
+        fun slotX(i: Int): Float = w - 345f - (2 - i) * (slotW + 12f)
+        fun slotHit(x: Float, y: Float): Int {
+            for (i in 0..1) {
+                if (x >= slotX(i) && x <= slotX(i) + slotW && y >= slotY && y <= slotY + slotH) return i
+            }
+            return -1
+        }
 
         var mx = 0f
         var my = 0f
@@ -963,6 +1013,7 @@ class BattleGame : ApplicationAdapter() {
                 } else if (inCircle(x, y, reloadX, reloadY, reloadR * 1.15f) ||
                     inCircle(x, y, swapX, swapY, swapR * 1.15f) ||
                     inCircle(x, y, camX, camY, camR * 1.15f) ||
+                    slotHit(x, y) >= 0 ||
                     (nearLoot != null && inCircle(x, y, pickX, pickY, pickR * 1.15f))) {
                     // finger is on a button, not on movement or look
                 } else if (x < w / 2f) {
@@ -1025,6 +1076,8 @@ class BattleGame : ApplicationAdapter() {
                     tryReload()
                 } else if (inCircle(tx, ty, swapX, swapY, swapR * 1.15f)) {
                     swapWeapon()
+                } else if (slotHit(tx, ty) >= 0) {
+                    selectSlot(slotHit(tx, ty))
                 } else if (inCircle(tx, ty, camX, camY, camR * 1.15f)) {
                     tpp = !tpp
                     pitch = pitch.coerceIn(if (tpp) -55f else -80f, if (tpp) 35f else 80f)
@@ -1404,6 +1457,19 @@ class BattleGame : ApplicationAdapter() {
         val mcy = h - 180f
         shapes.setColor(0f, 0.15f, 0f, 0.55f)
         shapes.rect(mcx - 150f, mcy - 150f, 300f, 300f)
+        // weapon boxes
+        for (i in 0..1) {
+            val bx = slotX(i)
+            val by = h - slotY - slotH
+            if (i == cur && slots[i].type >= 0) shapes.setColor(0.85f, 0.12f, 0.18f, 0.85f)
+            else if (slots[i].type >= 0) shapes.setColor(0f, 0f, 0f, 0.55f)
+            else shapes.setColor(0f, 0f, 0f, 0.3f)
+            shapes.rect(bx, by, slotW, slotH)
+            if (slots[i].type >= 0) {
+                shapes.setColor(1f, 1f, 1f, if (i == cur) 1f else 0.8f)
+                gunIcon(slots[i].type, bx + slotW / 2f, by + slotH * 0.58f)
+            }
+        }
         shapes.end()
 
         Gdx.gl.glLineWidth(3f)
@@ -1460,7 +1526,20 @@ class BattleGame : ApplicationAdapter() {
         if (msgT > 0f) centered(msg, h * 0.64f, w)
         if (nl != null) centered("Weapon: " + weapons[nl.kind].name + " - tap PICK", h * 0.34f, w)
 
-        // button labels
+        // weapon box texts
+        font.data.setScale(1.6f)
+        for (i in 0..1) {
+            val bx = slotX(i)
+            val by = h - slotY - slotH
+            if (slots[i].type >= 0) {
+                val d = weapons[slots[i].type]
+                val t = if (i == cur) "${slots[i].mag}/$reserve" else "${slots[i].mag}"
+                label(t, bx + slotW / 2f, by + 17f)
+                label(d.name, bx + slotW / 2f, by + slotH - 14f)
+            } else {
+                label("EMPTY", bx + slotW / 2f, by + slotH / 2f)
+            }
+        }
         font.data.setScale(2f)
         label("RELOAD", reloadX, h - reloadY)
         label("SWAP", swapX, h - swapY)
