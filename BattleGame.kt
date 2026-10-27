@@ -45,6 +45,8 @@ class Bot(val gender: Int, val outfit: Int, val pos: Vector3, var hp: Float = 10
     var anim = 0f
     var shooting = false
     var moving = false
+    var weapon = 2
+    var back = -1
     var deadT = 0f
     var rival: Bot? = null
     var scanT = 0f
@@ -109,6 +111,12 @@ class BattleGame : ApplicationAdapter() {
     private val pendingKill = ArrayList<Bot>()
     private val weapons = ArrayList<WDef>()
     private val weaponProps = ArrayList<Prop>()
+    private val tpProps = ArrayList<Prop>()      // guns without the first-person arms
+    private val frameMeta = HashMap<String, FloatArray>()
+    // grip point (in gun space) and distance between the two hands for each gun
+    private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f)
+    private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f)
+    private val holdD = floatArrayOf(0.18f, 0.33f, 0.48f, 0.50f)
     private val itemProps = ArrayList<Prop>()
     private val beams = ArrayList<ModelInstance>()
     private val loot = ArrayList<Loot>()
@@ -276,6 +284,11 @@ class BattleGame : ApplicationAdapter() {
     private fun loadStep() {
         try {
             if (humanLoader == null) {
+                var e = JsonReader().parse(Gdx.files.internal("bot_meta.json")).child
+                while (e != null) {
+                    frameMeta[e.name] = e.asFloatArray()
+                    e = e.next
+                }
                 humanLoader = G3dModelLoader(JsonReader())
                 humanProvider = object : TextureProvider {
                     override fun load(fileName: String): Texture = getTex(fileName)
@@ -323,7 +336,7 @@ class BattleGame : ApplicationAdapter() {
         return if (abs(d) <= step) b else a + (if (d > 0f) step else -step)
     }
 
-    private fun drawBot(b: Bot, frame: Int, fall: Float) {
+    private fun drawBot(b: Bot, frame: Int, fall: Float, fire: Boolean = false) {
         val ins = if (humansOk) humans[b.gender][b.outfit][frame.coerceIn(0, 17)] else null
         if (ins == null) {
             boxInst.transform.setToTranslation(b.pos.x, 1f, b.pos.z)
@@ -331,9 +344,45 @@ class BattleGame : ApplicationAdapter() {
             return
         }
         ins.transform.setToTranslation(b.pos.x, 0f, b.pos.z).rotate(Vector3.Y, b.yaw)
-        if (b.moving && fall <= 0f) ins.transform.rotate(Vector3.X, 5f)
         if (fall > 0f) ins.transform.rotate(Vector3.X, -90f * fall)
         batch.render(ins, env)
+        drawCarry(Matrix4(ins.transform), b.gender, frame, b.weapon, b.back, fire)
+    }
+
+    private val vx = Vector3()
+    private val vy = Vector3()
+    private val vz = Vector3()
+    private val vp = Vector3()
+
+    // gun in the hands + second gun slung on the back
+    private fun drawCarry(base: Matrix4, g: Int, frame: Int, held: Int, back: Int, fire: Boolean) {
+        val m = frameMeta[(if (g == 0) "m_" else "f_") + frameName(frame.coerceIn(0, 17))] ?: return
+        if (held in 0..3) {
+            // barrel direction F, grip point G, hands distance d
+            vz.set(-m[3], -m[4], -m[5])                         // gun +Z = backwards
+            vy.set(0f, 1f, 0f).sub(Vector3(vz).scl(vz.y)).nor()
+            vx.set(vy).crs(vz)
+            vp.set(m[0], m[1], m[2])
+            val s = (m[6] / holdD[held]).coerceIn(0.7f, 1.25f)
+            val hm = Matrix4(base).translate(vp).mul(Matrix4().set(vx, vy, vz, Vector3.Zero))
+            hm.scale(s, s, s).translate(0f, -(gripY[held] + 0.02f), -gripZ[held])
+            drawProp(tpProps[held], hm)
+            if (fire) {
+                val fb = Matrix4(hm).translate(0f, weapons[held].muzzleY, weapons[held].muzzleZ - 0.04f)
+                drawProp(flashProp, fb)
+            }
+        }
+        if (back in 0..3) {
+            val bm = Matrix4(base)
+            if (back == 0) {
+                // pistol on the hip
+                bm.translate(m[7] - 0.22f, m[8] - 0.62f, m[9] + 0.16f).rotate(Vector3.Y, 180f).scale(1.1f, 1.1f, 1.1f)
+            } else {
+                bm.translate(m[7], m[8] - 0.2f, m[9] - 0.03f).rotate(Vector3.Z, 18f).rotate(Vector3.X, 72f).rotate(Vector3.Z, 90f)
+                bm.scale(0.8f, 0.8f, 0.8f).translate(0f, 0f, 0.2f)
+            }
+            drawProp(tpProps[back], bm)
+        }
     }
 
     // ------------------------------------------------------------------
@@ -379,6 +428,7 @@ class BattleGame : ApplicationAdapter() {
             mk(p, 0.04f, 0.02f, 0.07f, dark, 0f, -0.04f, -0.03f)
             mk(p, 0.015f, 0.02f, 0.015f, black, 0f, 0.088f, -0.17f)
             mk(p, 0.025f, 0.02f, 0.015f, black, 0f, 0.088f, 0.06f)
+            tpProps.add(Prop(ArrayList(p)))
             addRightArm(p, -0.075f, 0.045f)
             weaponProps.add(Prop(p))
             weapons.add(WDef("PISTOL", 22f, 0.28f, 12, 1.2f, 150f, false, 1.5f, 0.04f, -0.23f))
@@ -396,6 +446,7 @@ class BattleGame : ApplicationAdapter() {
             mk(p, 0.035f, 0.05f, 0.18f, gray, 0f, 0.005f, 0.24f)
             mk(p, 0.05f, 0.10f, 0.03f, black, 0f, -0.01f, 0.34f)
             mk(p, 0.03f, 0.035f, 0.10f, black, 0f, 0.075f, -0.04f)
+            tpProps.add(Prop(ArrayList(p)))
             addRightArm(p, -0.11f, 0.09f)
             addLeftArm(p, -0.07f, -0.24f)
             weaponProps.add(Prop(p))
@@ -416,6 +467,7 @@ class BattleGame : ApplicationAdapter() {
             mk(p, 0.045f, 0.20f, 0.075f, dark, 0f, -0.15f, -0.13f)
             mk(p, 0.045f, 0.04f, 0.10f, black, 0f, 0.075f, -0.02f)
             mkGlow(p, 0.03f, 0.03f, 0.012f, Color(1f, 0.1f, 0.1f, 1f), 0f, 0.08f, -0.075f)
+            tpProps.add(Prop(ArrayList(p)))
             addRightArm(p, -0.12f, 0.08f)
             addLeftArm(p, -0.085f, -0.40f)
             weaponProps.add(Prop(p))
@@ -439,6 +491,7 @@ class BattleGame : ApplicationAdapter() {
             mk(p, 0.05f, 0.04f, 0.14f, wood, 0f, 0.06f, 0.33f)
             mk(p, 0.05f, 0.13f, 0.06f, black, 0f, -0.12f, 0.14f)
             mk(p, 0.04f, 0.10f, 0.07f, dark, 0f, -0.10f, -0.10f)
+            tpProps.add(Prop(ArrayList(p)))
             addRightArm(p, -0.12f, 0.14f)
             addLeftArm(p, -0.045f, -0.36f)
             weaponProps.add(Prop(p))
@@ -561,7 +614,7 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun onBotDeath(b: Bot) {
-        addLoot(randWeapon(), b.pos.x, b.pos.z)
+        addLoot(b.weapon, b.pos.x, b.pos.z)
         addLoot(5, b.pos.x + 1.5f, b.pos.z)
     }
 
@@ -802,6 +855,9 @@ class BattleGame : ApplicationAdapter() {
             val bot = Bot(rnd.nextInt(2), rnd.nextInt(3), p)
             bot.target.set(p)
             bot.yaw = rnd.nextFloat() * 360f
+            bot.weapon = randWeapon()
+            bot.back = if (rnd.nextInt(100) < 65) randWeapon() else -1
+            if (bot.back == bot.weapon) bot.back = -1
             bots.add(bot)
         }
     }
@@ -1196,13 +1252,8 @@ class BattleGame : ApplicationAdapter() {
             val pi = humans[0][0][pf]
             if (pi != null) {
                 pi.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, pYaw)
-                if (moving) pi.transform.rotate(Vector3.X, 5f)
                 batch.render(pi, env)
-                if (flash > 0f) {
-                    val mz = muz[0]
-                    flashInst.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, pYaw).translate(mz[0], mz[1], mz[2])
-                    batch.render(flashInst, env)
-                }
+                drawCarry(Matrix4(pi.transform), 0, pf, slots[cur].type, slots[1 - cur].type, flash > 0f)
             }
         }
         for (b in bots) {
@@ -1210,12 +1261,8 @@ class BattleGame : ApplicationAdapter() {
             val bdz = b.pos.z - cam.position.z
             if (bdx * bdx + bdz * bdz > 250f * 250f) continue
             if (!cam.frustum.sphereInFrustum(b.pos.x, 1f, b.pos.z, 1.8f)) continue
-            drawBot(b, if (b.shooting) (if (b.moving) 8 + (b.anim.toInt() and 7) else 17) else if (b.moving) (b.anim.toInt() and 7) else 16, 0f)
-            if (b.shooting && ((gameTime * 18f).toInt() + b.outfit) % 2 == 0) {
-                val mz = muz[b.gender]
-                flashInst.transform.setToTranslation(b.pos.x, 0f, b.pos.z).rotate(Vector3.Y, b.yaw).translate(mz[0], mz[1], mz[2])
-                batch.render(flashInst, env)
-            }
+            drawBot(b, if (b.shooting) (if (b.moving) 8 + (b.anim.toInt() and 7) else 17) else if (b.moving) (b.anim.toInt() and 7) else 16, 0f,
+                    b.shooting && ((gameTime * 18f).toInt() + b.outfit) % 2 == 0)
         }
         val ci = corpses.iterator()
         while (ci.hasNext()) {
