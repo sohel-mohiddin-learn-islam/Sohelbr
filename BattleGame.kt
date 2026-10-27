@@ -131,6 +131,18 @@ class BattleGame : ApplicationAdapter() {
     private val holdScale = floatArrayOf(1.0f, 0.9f, 0.85f, 0.75f)
     private var pActor: Actor? = null
     private var pArmedT = 0f
+    // plane drop: 0 = in the plane, 1 = free fall, 2 = parachute, 3 = on the ground
+    private var dropState = 3
+    private var planeX = 0f
+    private var planeZ = 0f
+    private val planeY = 150f
+    private var planeDX = 1f
+    private var planeDZ = 0f
+    private var planeYaw = 0f
+    private var planeActive = false
+    private var dropVy = 0f
+    private lateinit var planeProp: Prop
+    private lateinit var canopy: ModelInstance
     // grip point (in gun space) and distance between the two hands for each gun
     private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f)
     private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f)
@@ -276,6 +288,7 @@ class BattleGame : ApplicationAdapter() {
         buildWeapons()
         buildItems()
         buildBeams()
+        buildPlane()
 
         Gdx.input.setInputProcessor(object : InputAdapter() {
             override fun touchDown(screenX: Int, screenY: Int, pointer: Int, button: Int): Boolean {
@@ -639,6 +652,68 @@ class BattleGame : ApplicationAdapter() {
         }
     }
 
+    private fun buildPlane() {
+        val body = Color(0.78f, 0.80f, 0.84f, 1f)
+        val dkr = Color(0.30f, 0.33f, 0.40f, 1f)
+        val red = Color(0.8f, 0.15f, 0.15f, 1f)
+        val p = ArrayList<Part>()
+        mk(p, 3.2f, 3.2f, 20f, body, 0f, 0f, 0f)             // fuselage (nose toward -Z)
+        mk(p, 2.4f, 2.4f, 3f, dkr, 0f, 0f, -11f)             // nose
+        mk(p, 24f, 0.5f, 4.5f, body, 0f, -0.4f, -1f)          // wings
+        mk(p, 24.2f, 0.52f, 0.8f, red, 0f, -0.4f, 1.1f)       // wing stripe
+        mk(p, 8f, 0.4f, 2.6f, body, 0f, 0.3f, 9.5f)           // tail wing
+        mk(p, 0.4f, 3.4f, 2.8f, red, 0f, 2.2f, 9.3f)          // tail fin
+        mk(p, 2.6f, 1.2f, 3f, Color(0.2f, 0.5f, 0.9f, 1f), 0f, 1.5f, -6f)  // cockpit glass
+        planeProp = Prop(p)
+        val cm = mb.createSphere(7f, 3.6f, 7f, 18, 12,
+            Material(ColorAttribute.createDiffuse(1f, 0.45f, 0.1f, 1f)), attrs)
+        models.add(cm)
+        canopy = ModelInstance(cm)
+    }
+
+    private fun startFreefall() {
+        if (dropState != 0) return
+        dropState = 1
+        dropVy = 0f
+        msg = "FREEFALL - tap CHUTE to open the parachute"
+        msgT = 3f
+    }
+
+    private fun openChute() {
+        if (dropState != 1) return
+        dropState = 2
+        msg = "Parachute open - steer to your landing spot"
+        msgT = 3f
+    }
+
+    // flying in the plane / falling / gliding down
+    private fun updateDrop(dt: Float, mx: Float, my: Float, fwd: Vector3, right: Vector3) {
+        if (dropState == 0) {
+            cam.position.set(planeX, planeY - 1.7f, planeZ)
+            if (abs(planeX) > 500f || abs(planeZ) > 500f) startFreefall()
+            return
+        }
+        val hs = if (dropState == 1) 22f else 11f
+        cam.position.add(Vector3(fwd).scl(my * hs * dt)).add(Vector3(right).scl(mx * hs * dt))
+        if (dropState == 1) {
+            dropVy = maxOf(dropVy - 25f * dt, -40f)
+            if (cam.position.y < 75f) openChute()
+        } else {
+            dropVy += (-7f - dropVy) * minOf(1f, 3f * dt)
+        }
+        cam.position.y += dropVy * dt
+        cam.position.x = cam.position.x.coerceIn(-495f, 495f)
+        cam.position.z = cam.position.z.coerceIn(-495f, 495f)
+        if (cam.position.y <= 1.7f) {
+            cam.position.y = 1.7f
+            dropState = 3
+            dropVy = 0f
+            collide(cam.position, 0.6f)
+            msg = "Landed! Find a weapon."
+            msgT = 2.5f
+        }
+    }
+
     private fun drawProp(p: Prop, base: Matrix4) {
         for (pt in p.parts) {
             pt.inst.transform.set(base).translate(pt.ox, pt.oy, pt.oz)
@@ -859,6 +934,23 @@ class BattleGame : ApplicationAdapter() {
         cur = 0
         cam.position.set(0f, 1.7f, 0f)
         collide(cam.position, 0.6f)
+        run {
+            val a = rnd.nextFloat() * 6.2831853f
+            planeDX = cos(a)
+            planeDZ = sin(a)
+            val off = (rnd.nextFloat() - 0.5f) * 300f
+            planeX = -planeDX * 560f - planeDZ * off
+            planeZ = -planeDZ * 560f + planeDX * off
+            planeYaw = atan2(-planeDX, -planeDZ) * 57.29578f
+            yaw = planeYaw
+            pitch = -15f
+            planeActive = true
+            dropState = 0
+            dropVy = 0f
+            cam.position.set(planeX, planeY - 1.7f, planeZ)
+            msg = "Tap DROP to jump out of the plane"
+            msgT = 5f
+        }
         matchTime = 0f
         phase = 0
         phaseTime = 0f
@@ -1119,18 +1211,27 @@ class BattleGame : ApplicationAdapter() {
                 val vel = Vector3(fwd).scl(my).add(Vector3(right).scl(mx))
                 pMoveYaw = atan2(vel.x, vel.z) * 57.29578f
             }
-            cam.position.add(fwd.scl(my * speed * dt)).add(right.scl(mx * speed * dt))
-            if (cam.position.y > 1.7f || jumpV != 0f) {
-                jumpV -= 18f * dt
-                cam.position.y += jumpV * dt
-                if (cam.position.y <= 1.7f) {
-                    cam.position.y = 1.7f
-                    jumpV = 0f
+            if (dropState < 3) {
+                updateDrop(dt, mx, my, fwd, right)
+            } else {
+                cam.position.add(fwd.scl(my * speed * dt)).add(right.scl(mx * speed * dt))
+                if (cam.position.y > 1.7f || jumpV != 0f) {
+                    jumpV -= 18f * dt
+                    cam.position.y += jumpV * dt
+                    if (cam.position.y <= 1.7f) {
+                        cam.position.y = 1.7f
+                        jumpV = 0f
+                    }
                 }
+                cam.position.x = cam.position.x.coerceIn(-495f, 495f)
+                cam.position.z = cam.position.z.coerceIn(-495f, 495f)
+                collide(cam.position, 0.6f)
             }
-            cam.position.x = cam.position.x.coerceIn(-495f, 495f)
-            cam.position.z = cam.position.z.coerceIn(-495f, 495f)
-            collide(cam.position, 0.6f)
+            if (planeActive) {
+                planeX += planeDX * 45f * dt
+                planeZ += planeDZ * 45f * dt
+                if (dropState > 0 && (abs(planeX) > 700f || abs(planeZ) > 700f)) planeActive = false
+            }
 
             updateZone(dt * timeScale)
             val pdx = cam.position.x - zoneCx
@@ -1151,8 +1252,8 @@ class BattleGame : ApplicationAdapter() {
                 val ldz = l.z - cam.position.z
                 val ld = sqrt(ldx * ldx + ldz * ldz)
                 if (l.kind >= 4) {
-                    if (ld < 2.2f && applyItem(l)) loot.removeAt(li)
-                } else if (ld < nearD) {
+                    if (dropState == 3 && ld < 2.2f && applyItem(l)) loot.removeAt(li)
+                } else if (dropState == 3 && ld < nearD) {
                     near = l
                     nearD = ld
                 }
@@ -1176,7 +1277,9 @@ class BattleGame : ApplicationAdapter() {
                 } else if (inCircle(tx, ty, runX, runY, runR * 1.15f)) {
                     sprint = !sprint
                 } else if (inCircle(tx, ty, jumpX, jumpY, jumpR * 1.15f)) {
-                    if (cam.position.y <= 1.72f) jumpV = 6.5f
+                    if (dropState == 0) startFreefall()
+                    else if (dropState == 1) openChute()
+                    else if (dropState == 3 && cam.position.y <= 1.72f) jumpV = 6.5f
                 } else if (slotHit(tx, ty) >= 0) {
                     selectSlot(slotHit(tx, ty))
                 } else if (inCircle(tx, ty, camX, camY, camR * 1.15f)) {
@@ -1210,7 +1313,7 @@ class BattleGame : ApplicationAdapter() {
                 reloading = false
             }
         }
-        val wantFire = firing && (def.auto || !firingLast)
+        val wantFire = firing && (def.auto || !firingLast) && dropState == 3
         if (wantFire && cooldown <= 0f && !over && !reloading) {
             if (slot.mag > 0) {
                 slot.mag -= 1
@@ -1294,7 +1397,7 @@ class BattleGame : ApplicationAdapter() {
                 val toPx = cam.position.x - b.pos.x
                 val toPz = cam.position.z - b.pos.z
                 val toP = sqrt(toPx * toPx + toPz * toPz)
-                val los = toP < 30f && hasLos(Vector3(b.pos.x, 1.5f, b.pos.z), eye)
+                val los = toP < 30f && dropState == 3 && hasLos(Vector3(b.pos.x, 1.5f, b.pos.z), eye)
                 var speed = 2.5f
                 var move = true
                 var facePlayer = false
@@ -1405,22 +1508,30 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
         val eyeP = Vector3(cam.position)
         val pa = pActor
-        val showBody = tpp && humansOk && pa != null
+        val showBody = tpp && humansOk && pa != null && dropState > 0
         if (tpp) {
             cam.position.set(tpCamPos(eyeP))
             cam.update()
         }
         batch.begin(cam)
         batch.render(buildings, env)
+        if (planeActive) {
+            val pm = Matrix4().translate(planeX, planeY, planeZ).rotate(Vector3.Y, planeYaw)
+            drawProp(planeProp, pm)
+        }
+        if (dropState == 2) {
+            canopy.transform.setToTranslation(eyeP.x, eyeP.y + 3.4f, eyeP.z)
+            batch.render(canopy, env)
+        }
         if (showBody && pa != null) {
             val moving = pMoving
             val shoot = flash > 0f || firing
             if (shoot) pArmedT = 2.5f else pArmedT -= dt
             val armedNow = pArmedT > 0f
-            val tgt = if (armedNow) yaw + 180f else if (moving) pMoveYaw else pYaw
+            val tgt = if (armedNow || dropState in 1..2) yaw + 180f else if (moving) pMoveYaw else pYaw
             pYaw = turnTo(pYaw, tgt, 720f * dt)
             if (hp <= 0f) play(pa, "Death", 1f, 1, 0.1f)
-            else if (eyeP.y > 1.78f) play(pa, "Jump", 1f)
+            else if (dropState in 1..2 || eyeP.y > 1.78f) play(pa, "Jump", 1f)
             else locoAnim(pa, if (moving) pSpeed else 0f, armedNow)
             pa.ctrl.update(dt)
             drawActor(pa, eyeP.x, eyeP.y - 1.7f, eyeP.z, pYaw, slots[cur].type, slots[1 - cur].type, armedNow && hp > 0f, flash > 0f)
@@ -1649,6 +1760,10 @@ class BattleGame : ApplicationAdapter() {
             val ddz = l.z - cam.position.z
             if (ddx * ddx + ddz * ddz < 120f * 120f) shapes.circle(mcx + l.x * ms, mcy - l.z * ms, 2f)
         }
+        if (planeActive) {
+            shapes.setColor(1f, 1f, 1f, 1f)
+            shapes.circle(mcx + planeX * ms, mcy - planeZ * ms, 7f)
+        }
         shapes.setColor(1f, 1f, 0f, 1f)
         shapes.circle(mcx + cam.position.x * ms, mcy - cam.position.z * ms, 6f)
         shapes.end()
@@ -1695,6 +1810,7 @@ class BattleGame : ApplicationAdapter() {
         }
         label("x$medkits", medX + 38f, h - medY + 40f)
 
+        if (dropState < 3) centered("ALTITUDE ${(if (dropState == 0) planeY else cam.position.y).toInt()} m", h * 0.28f, w)
         if (msgT > 0f) centered(msg, h * 0.64f, w)
         if (nl != null) centered("Weapon: " + weapons[nl.kind].name + " - tap PICK", h * 0.34f, w)
 
@@ -1702,7 +1818,7 @@ class BattleGame : ApplicationAdapter() {
         label("RELOAD", reloadX, h - reloadY)
         label(if (tpp) "1ST" else "3RD", camX, h - camY)
         label("RUN", runX, h - runY)
-        label("JUMP", jumpX, h - jumpY)
+        label(if (dropState == 0) "DROP" else if (dropState == 1) "CHUTE" else "JUMP", jumpX, h - jumpY)
         if (nl != null) label("PICK", pickX, h - pickY)
         font.data.setScale(3f)
 
