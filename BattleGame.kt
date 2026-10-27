@@ -22,6 +22,10 @@ import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute
 import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight
 import com.badlogic.gdx.graphics.g3d.loader.G3dModelLoader
+import com.badlogic.gdx.graphics.g3d.model.Node
+import com.badlogic.gdx.graphics.g3d.shaders.DefaultShader
+import com.badlogic.gdx.graphics.g3d.utils.AnimationController
+import com.badlogic.gdx.graphics.g3d.utils.DefaultShaderProvider
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder
 import com.badlogic.gdx.graphics.g3d.utils.TextureProvider
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
@@ -45,12 +49,23 @@ class Bot(val gender: Int, val outfit: Int, val pos: Vector3, var hp: Float = 10
     var anim = 0f
     var shooting = false
     var moving = false
+    var vel = 0f
+    var armedT = 0f
+    var actor: Actor? = null
     var weapon = 2
     var back = -1
     var deadT = 0f
     var rival: Bot? = null
     var scanT = 0f
 }
+
+class Actor(val inst: ModelInstance, val ctrl: AnimationController, val g: Int) {
+    var cur = ""
+    var hand: Node? = null
+    var spine: Node? = null
+}
+
+class ActorMeta(val handAimInv: Matrix4, val G: Vector3, val spineInv: Matrix4, val B: Vector3)
 
 class Block(val x: Float, val z: Float, val hw: Float, val hd: Float, val h: Float) {
     val box = BoundingBox(Vector3(x - hw, 0f, z - hd), Vector3(x + hw, h, z + hd))
@@ -77,7 +92,6 @@ class BattleGame : ApplicationAdapter() {
     private val zoneDamage = floatArrayOf(1f, 2f, 4f, 6f, 8f, 10f)
 
     // rifle muzzle of a bot in the aiming pose (bot-local: x left, y up, z forward), male / female
-    private val muz = arrayOf(floatArrayOf(-0.179f, 1.607f, 1.072f), floatArrayOf(-0.179f, 1.571f, 1.073f))
 
     private val mb = ModelBuilder()
     private val attrs = (Usage.Position or Usage.Normal).toLong()
@@ -112,7 +126,11 @@ class BattleGame : ApplicationAdapter() {
     private val weapons = ArrayList<WDef>()
     private val weaponProps = ArrayList<Prop>()
     private val tpProps = ArrayList<Prop>()      // guns without the first-person arms
-    private val frameMeta = HashMap<String, FloatArray>()
+    private val meta = arrayOfNulls<ActorMeta>(2)
+    private val botModels = arrayOfNulls<Model>(2)
+    private val holdScale = floatArrayOf(1.0f, 0.9f, 0.85f, 0.75f)
+    private var pActor: Actor? = null
+    private var pArmedT = 0f
     // grip point (in gun space) and distance between the two hands for each gun
     private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f)
     private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f)
@@ -124,10 +142,8 @@ class BattleGame : ApplicationAdapter() {
     private val rnd = Random()
 
     // human characters: [gender][outfit][frame]  frames 0..3 = run cycle, 4 = aiming
-    // frames: 0..7 run, 8..15 run+aim, 16 idle, 17 stand+aim
-    private val humans = Array(2) { Array(3) { arrayOfNulls<ModelInstance>(18) } }
     private var loadIdx = 0
-    private val loadTotal = 36
+    private val loadTotal = 4
     private var humanLoader: G3dModelLoader? = null
     private var humanProvider: TextureProvider? = null
     private var humansOk = false
@@ -196,7 +212,9 @@ class BattleGame : ApplicationAdapter() {
     private var toR = 0f
 
     override fun create() {
-        batch = ModelBatch()
+        val shCfg = DefaultShader.Config()
+        shCfg.numBones = 24
+        batch = ModelBatch(DefaultShaderProvider(shCfg))
         shapes = ShapeRenderer()
         sb = SpriteBatch()
         font = BitmapFont()
@@ -281,41 +299,79 @@ class BattleGame : ApplicationAdapter() {
         }
     }
 
-    private fun frameName(f: Int): String =
-        if (f < 8) "run" + f else if (f < 16) "arun" + (f - 8) else if (f == 16) "idle" else "aim"
+    // loads one thing per call so the game can show a loading bar (no freezing)
+    private fun loadModelFile(file: String): Model {
+        val m = humanLoader!!.loadModel(Gdx.files.internal(file), humanProvider)
+        models.add(m)
+        return m
+    }
 
-    // loads one model file per call so the game can show a loading bar (no freezing)
     private fun loadStep() {
         try {
-            if (humanLoader == null) {
-                var e = JsonReader().parse(Gdx.files.internal("bot_meta.json")).child
-                while (e != null) {
-                    frameMeta[e.name] = e.asFloatArray()
-                    e = e.next
+            when (loadIdx) {
+                0 -> {
+                    humanLoader = G3dModelLoader(JsonReader())
+                    humanProvider = object : TextureProvider {
+                        override fun load(fileName: String): Texture = getTex(fileName)
+                    }
+                    val root = JsonReader().parse(Gdx.files.internal("bot_meta.json"))
+                    for (g in 0..1) {
+                        val j = root.get(if (g == 0) "m" else "f")
+                        val hand = Matrix4(j.get("hand").asFloatArray())
+                        val spine = Matrix4(j.get("spine").asFloatArray())
+                        val gg = j.get("G").asFloatArray()
+                        val bb = j.get("B").asFloatArray()
+                        meta[g] = ActorMeta(hand.inv(), Vector3(gg[0], gg[1], gg[2]), spine.inv(), Vector3(bb[0], bb[1], bb[2]))
+                    }
+                    botModels[0] = loadModelFile("bot_m.g3dj")
                 }
-                humanLoader = G3dModelLoader(JsonReader())
-                humanProvider = object : TextureProvider {
-                    override fun load(fileName: String): Texture = getTex(fileName)
+                1 -> botModels[1] = loadModelFile("bot_f.g3dj")
+                2 -> {
+                    for (g in arrayOf("m", "f")) for (o in 0..2) getTex("bot_" + g + "_" + o + ".jpg")
                 }
-            }
-            val tag = arrayOf("m", "f")
-            val g = loadIdx / 18
-            val f = loadIdx % 18
-            val file = "bot_" + tag[g] + "_" + frameName(f) + ".g3dj"
-            val m = humanLoader!!.loadModel(Gdx.files.internal(file), humanProvider)
-            models.add(m)
-            for (o in 0..2) {
-                val inst = ModelInstance(m)
-                inst.getMaterial("skin").set(TextureAttribute.createDiffuse(getTex("bot_" + tag[g] + "_" + o + ".jpg")))
-                humans[g][o][f] = inst
+                3 -> {
+                    humansOk = true
+                    for (b in bots) if (b.actor == null) b.actor = makeActor(b.gender, b.outfit)
+                    pActor = makeActor(0, 0)
+                }
             }
             loadIdx++
-            if (loadIdx >= loadTotal) humansOk = true
         } catch (e: Throwable) {
             Gdx.app.error("BattleGame", "Could not load character models", e)
             humansOk = false
             loadIdx = loadTotal
         }
+    }
+
+    private fun makeActor(g: Int, o: Int): Actor? {
+        val m = botModels[g] ?: return null
+        val inst = ModelInstance(m)
+        inst.getMaterial("skin").set(TextureAttribute.createDiffuse(getTex("bot_" + (if (g == 0) "m" else "f") + "_" + o + ".jpg")))
+        val a = Actor(inst, AnimationController(inst), g)
+        a.hand = inst.getNode("hand_r", true)
+        a.spine = inst.getNode("spine_03", true)
+        a.ctrl.animate("Idle", -1, 1f, null, 0f)
+        a.cur = "Idle"
+        return a
+    }
+
+    private fun play(a: Actor, name: String, speed: Float, loops: Int = -1, fade: Float = 0.2f) {
+        if (a.cur != name) {
+            a.cur = name
+            a.ctrl.animate(name, loops, speed, null, fade)
+        } else {
+            val d = a.ctrl.current
+            if (d != null) d.speed = speed
+        }
+    }
+
+    // pick idle / walk / jog / sprint (with the aiming upper body when armed) from the real speed
+    private fun locoAnim(a: Actor, v: Float, armed: Boolean) {
+        val pre = if (armed) "Aim" else ""
+        if (v < 0.3f) play(a, if (armed) "AimStand" else "Idle", 1f)
+        else if (v < 2.3f) play(a, pre + "Walk", (v / 1.5f).coerceIn(0.6f, 1.6f))
+        else if (v < 6.3f) play(a, pre + "Jog", (v / 3.5f).coerceIn(0.7f, 1.7f))
+        else play(a, pre + "Sprint", (v / 6f).coerceIn(0.8f, 1.8f))
     }
 
     private fun drawLoading(w: Float, h: Float) {
@@ -340,63 +396,59 @@ class BattleGame : ApplicationAdapter() {
         return if (abs(d) <= step) b else a + (if (d > 0f) step else -step)
     }
 
-    private fun drawBot(b: Bot, frame: Int, fall: Float, fire: Boolean = false) {
-        val ins = if (humansOk) humans[b.gender][b.outfit][frame.coerceIn(0, 17)] else null
-        if (ins == null) {
-            boxInst.transform.setToTranslation(b.pos.x, 1f, b.pos.z)
-            batch.render(boxInst, env)
-            return
-        }
-        ins.transform.setToTranslation(b.pos.x, 0f, b.pos.z).rotate(Vector3.Y, b.yaw)
-        if (fall > 0f) ins.transform.rotate(Vector3.X, -90f * fall)
-        batch.render(ins, env)
-        drawCarry(Matrix4(ins.transform), b.gender, frame, b.weapon, b.back, fire)
-    }
-
     private val vx = Vector3()
     private val vy = Vector3()
     private val vz = Vector3()
-    private val vp = Vector3()
 
-    // guns are slung on the back (like Free Fire); the current gun comes into the hands while shooting
-    private fun drawCarry(base: Matrix4, g: Int, frame: Int, held: Int, back: Int, fire: Boolean) {
-        val fr = frame.coerceIn(0, 17)
-        val m = frameMeta[(if (g == 0) "m_" else "f_") + frameName(fr)] ?: return
-        val armed = (fr in 8..15) || fr == 17
-        var slung1 = back
-        var slung2 = -1
-        if (armed && held in 0..3) {
-            // barrel direction F, grip point G, hands distance d
-            vz.set(-m[3], -m[4], -m[5])                         // gun +Z = backwards
-            vy.set(0f, 1f, 0f).sub(Vector3(vz).scl(vz.y)).nor()
+    private fun drawActor(a: Actor, x: Float, y: Float, z: Float, yawDeg: Float, held: Int, back: Int, armed: Boolean, fire: Boolean) {
+        a.inst.transform.setToTranslation(x, y, z).rotate(Vector3.Y, yawDeg)
+        batch.render(a.inst, env)
+        carry(a, held, back, armed, fire)
+    }
+
+    // guns are slung on the back (like Free Fire); the current gun comes into the hands while shooting.
+    // Everything follows the animated bones (hand_r and spine_03).
+    private fun carry(a: Actor, held: Int, back: Int, armed: Boolean, fire: Boolean) {
+        val mt = meta[a.g] ?: return
+        val base = a.inst.transform
+        var s1 = back
+        var s2 = -1
+        val hn = a.hand
+        val sn = a.spine
+        if (armed && held in 0..3 && hn != null) {
+            val rel = Matrix4(hn.globalTransform).mul(mt.handAimInv)
+            vz.set(0f, 0f, -1f)
+            vy.set(0f, 1f, 0f)
             vx.set(vy).crs(vz)
-            vp.set(m[0], m[1], m[2])
-            val s = (m[6] / holdD[held]).coerceIn(0.7f, 1.25f)
-            val hm = Matrix4(base).translate(vp).mul(Matrix4().set(vx, vy, vz, Vector3.Zero))
-            hm.scale(s, s, s).translate(0f, -(gripY[held] + 0.02f), -gripZ[held])
-            drawProp(tpProps[held], hm)
+            val s = holdScale[held]
+            val gm = Matrix4(base).mul(rel).translate(mt.G).mul(Matrix4().set(vx, vy, vz, Vector3.Zero))
+            gm.scale(s, s, s).translate(0f, -(gripY[held] + 0.02f), -gripZ[held])
+            drawProp(tpProps[held], gm)
             if (fire) {
-                val fb = Matrix4(hm).translate(0f, weapons[held].muzzleY, weapons[held].muzzleZ - 0.04f)
+                val fb = Matrix4(gm).translate(0f, weapons[held].muzzleY, weapons[held].muzzleZ - 0.04f)
                 drawProp(flashProp, fb)
             }
         } else {
-            slung1 = held
-            slung2 = back
+            s1 = held
+            s2 = back
         }
-        if (slung1 in 0..3) drawSlung(base, m, slung1, 0)
-        if (slung2 in 0..3) drawSlung(base, m, slung2, 1)
+        if (sn != null) {
+            val sRel = Matrix4(base).mul(Matrix4(sn.globalTransform).mul(mt.spineInv))
+            if (s1 in 0..3) slung(sRel, mt.B, s1, 0)
+            if (s2 in 0..3) slung(sRel, mt.B, s2, 1)
+        }
     }
 
-    private fun drawSlung(base: Matrix4, m: FloatArray, type: Int, slot: Int) {
+    private fun slung(base: Matrix4, B: Vector3, type: Int, slot: Int) {
         val bm = Matrix4(base)
         if (type == 0) {
             // pistol in a holster on the hip
-            bm.translate(m[7] - 0.22f + 0.44f * slot, m[8] - 0.62f, m[9] + 0.16f).rotate(Vector3.Y, 180f).scale(1.1f, 1.1f, 1.1f)
+            bm.translate(B.x - 0.22f + 0.44f * slot, B.y - 0.62f, B.z + 0.16f).rotate(Vector3.Y, 180f).scale(1.1f, 1.1f, 1.1f)
         } else {
             // rifle strap over the back: barrel up over the shoulder, side of the gun against the back
             val tilt = if (slot == 0) 10f else -10f
             val sc = if (type == 3) 0.7f else 0.8f
-            bm.translate(m[7] + (if (slot == 0) -0.03f else 0.03f), m[8] - 0.12f, m[9] - 0.04f - 0.05f * slot)
+            bm.translate(B.x + (if (slot == 0) -0.03f else 0.03f), B.y - 0.12f, B.z - 0.04f - 0.05f * slot)
             bm.rotate(Vector3.Z, tilt).rotate(Vector3.X, 80f).rotate(Vector3.Z, 90f)
             bm.scale(sc, sc, sc).translate(0f, 0f, 0.2f)
         }
@@ -641,6 +693,8 @@ class BattleGame : ApplicationAdapter() {
         onBotDeath(b)
         b.deadT = 0f
         b.shooting = false
+        val ba = b.actor
+        if (ba != null) play(ba, "Death", 1f, 1, 0.1f)
         corpses.add(b)
     }
 
@@ -777,6 +831,12 @@ class BattleGame : ApplicationAdapter() {
         pitch = 0f
         pYaw = 180f
         pMoving = false
+        pArmedT = 0f
+        val pa0 = pActor
+        if (pa0 != null) {
+            pa0.cur = ""
+            play(pa0, "Idle", 1f, -1, 0f)
+        }
         hurtFlash = 0f
         hitMark = 0f
         hitHead = false
@@ -914,6 +974,7 @@ class BattleGame : ApplicationAdapter() {
             collide(p, 0.8f)
             val bot = Bot(rnd.nextInt(2), rnd.nextInt(3), p)
             bot.target.set(p)
+            if (humansOk) bot.actor = makeActor(bot.gender, bot.outfit)
             bot.yaw = rnd.nextFloat() * 360f
             bot.weapon = randWeapon()
             bot.back = if (rnd.nextInt(100) < 65) randWeapon() else -1
@@ -1051,8 +1112,8 @@ class BattleGame : ApplicationAdapter() {
 
             val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, yaw)
             val right = Vector3(fwd).crs(Vector3.Y)
-            val speed = if (sprint) 11f else 7f
-            pSpeed = speed
+            val speed = if (sprint) 8.5f else 5.5f
+            pSpeed = speed * minOf(1f, sqrt(mx * mx + my * my))
             pMoving = (mx * mx + my * my) > 0.04f
             if (pMoving) {
                 val vel = Vector3(fwd).scl(my).add(Vector3(right).scl(mx))
@@ -1312,7 +1373,8 @@ class BattleGame : ApplicationAdapter() {
 
                 b.shooting = los || rivalFire
                 b.moving = moved
-                if (moved) b.anim += dt * speed / 0.42f
+                b.vel = if (moved) speed else 0f
+                if (b.shooting) b.armedT = 2.2f else if (b.armedT > 0f) b.armedT -= dt
                 if (los) {
                     hurt(5f * dt)
                     damaged = true
@@ -1342,34 +1404,43 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glClearColor(0.5f, 0.8f, 1f, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
         val eyeP = Vector3(cam.position)
-        val showBody = tpp && hp > 0f && humansOk
-        if (tpp && hp > 0f) {
+        val pa = pActor
+        val showBody = tpp && humansOk && pa != null
+        if (tpp) {
             cam.position.set(tpCamPos(eyeP))
             cam.update()
         }
         batch.begin(cam)
         batch.render(buildings, env)
-        if (showBody) {
+        if (showBody && pa != null) {
             val moving = pMoving
             val shoot = flash > 0f || firing
-            if (moving) pAnim += dt * pSpeed / 0.42f
-            val tgt = if (shoot) yaw + 180f else if (moving) pMoveYaw else pYaw
+            if (shoot) pArmedT = 2.5f else pArmedT -= dt
+            val armedNow = pArmedT > 0f
+            val tgt = if (armedNow) yaw + 180f else if (moving) pMoveYaw else pYaw
             pYaw = turnTo(pYaw, tgt, 720f * dt)
-            val pf = if (shoot) (if (moving) 8 + (pAnim.toInt() and 7) else 17) else if (moving) (pAnim.toInt() and 7) else 16
-            val pi = humans[0][0][pf]
-            if (pi != null) {
-                pi.transform.setToTranslation(eyeP.x, eyeP.y - 1.7f, eyeP.z).rotate(Vector3.Y, pYaw)
-                batch.render(pi, env)
-                drawCarry(Matrix4(pi.transform), 0, pf, slots[cur].type, slots[1 - cur].type, flash > 0f)
-            }
+            if (hp <= 0f) play(pa, "Death", 1f, 1, 0.1f)
+            else if (eyeP.y > 1.78f) play(pa, "Jump", 1f)
+            else locoAnim(pa, if (moving) pSpeed else 0f, armedNow)
+            pa.ctrl.update(dt)
+            drawActor(pa, eyeP.x, eyeP.y - 1.7f, eyeP.z, pYaw, slots[cur].type, slots[1 - cur].type, armedNow && hp > 0f, flash > 0f)
         }
         for (b in bots) {
             val bdx = b.pos.x - cam.position.x
             val bdz = b.pos.z - cam.position.z
             if (bdx * bdx + bdz * bdz > 250f * 250f) continue
             if (!cam.frustum.sphereInFrustum(b.pos.x, 1f, b.pos.z, 1.8f)) continue
-            drawBot(b, if (b.shooting) (if (b.moving) 8 + (b.anim.toInt() and 7) else 17) else if (b.moving) (b.anim.toInt() and 7) else 16, 0f,
-                    b.shooting && ((gameTime * 18f).toInt() + b.outfit) % 2 == 0)
+            val ba = b.actor
+            if (ba == null) {
+                boxInst.transform.setToTranslation(b.pos.x, 1f, b.pos.z)
+                batch.render(boxInst, env)
+                continue
+            }
+            val armed = b.armedT > 0f
+            locoAnim(ba, b.vel, armed)
+            ba.ctrl.update(dt)
+            drawActor(ba, b.pos.x, 0f, b.pos.z, b.yaw, b.weapon, b.back, armed,
+                      b.shooting && ((gameTime * 18f).toInt() + b.outfit) % 2 == 0)
         }
         val ci = corpses.iterator()
         while (ci.hasNext()) {
@@ -1379,7 +1450,11 @@ class BattleGame : ApplicationAdapter() {
                 ci.remove()
                 continue
             }
-            drawBot(c, 17, minOf(c.deadT / 0.45f, 1f))
+            val ca = c.actor
+            if (ca != null) {
+                if (c.deadT < 2.6f) ca.ctrl.update(dt)
+                drawActor(ca, c.pos.x, 0f, c.pos.z, c.yaw, -1, -1, false, false)
+            }
         }
         for (l in loot) {
             val dx = l.x - cam.position.x
