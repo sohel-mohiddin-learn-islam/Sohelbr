@@ -354,10 +354,14 @@ class BattleGame : ApplicationAdapter() {
     private val vz = Vector3()
     private val vp = Vector3()
 
-    // gun in the hands + second gun slung on the back
+    // guns are slung on the back (like Free Fire); the current gun comes into the hands while shooting
     private fun drawCarry(base: Matrix4, g: Int, frame: Int, held: Int, back: Int, fire: Boolean) {
-        val m = frameMeta[(if (g == 0) "m_" else "f_") + frameName(frame.coerceIn(0, 17))] ?: return
-        if (held in 0..3) {
+        val fr = frame.coerceIn(0, 17)
+        val m = frameMeta[(if (g == 0) "m_" else "f_") + frameName(fr)] ?: return
+        val armed = (fr in 8..15) || fr == 17
+        var slung1 = back
+        var slung2 = -1
+        if (armed && held in 0..3) {
             // barrel direction F, grip point G, hands distance d
             vz.set(-m[3], -m[4], -m[5])                         // gun +Z = backwards
             vy.set(0f, 1f, 0f).sub(Vector3(vz).scl(vz.y)).nor()
@@ -371,18 +375,28 @@ class BattleGame : ApplicationAdapter() {
                 val fb = Matrix4(hm).translate(0f, weapons[held].muzzleY, weapons[held].muzzleZ - 0.04f)
                 drawProp(flashProp, fb)
             }
+        } else {
+            slung1 = held
+            slung2 = back
         }
-        if (back in 0..3) {
-            val bm = Matrix4(base)
-            if (back == 0) {
-                // pistol on the hip
-                bm.translate(m[7] - 0.22f, m[8] - 0.62f, m[9] + 0.16f).rotate(Vector3.Y, 180f).scale(1.1f, 1.1f, 1.1f)
-            } else {
-                bm.translate(m[7], m[8] - 0.2f, m[9] - 0.03f).rotate(Vector3.Z, 18f).rotate(Vector3.X, 72f).rotate(Vector3.Z, 90f)
-                bm.scale(0.8f, 0.8f, 0.8f).translate(0f, 0f, 0.2f)
-            }
-            drawProp(tpProps[back], bm)
+        if (slung1 in 0..3) drawSlung(base, m, slung1, 0)
+        if (slung2 in 0..3) drawSlung(base, m, slung2, 1)
+    }
+
+    private fun drawSlung(base: Matrix4, m: FloatArray, type: Int, slot: Int) {
+        val bm = Matrix4(base)
+        if (type == 0) {
+            // pistol in a holster on the hip
+            bm.translate(m[7] - 0.22f + 0.44f * slot, m[8] - 0.62f, m[9] + 0.16f).rotate(Vector3.Y, 180f).scale(1.1f, 1.1f, 1.1f)
+        } else {
+            // rifle strap over the back: barrel up over the shoulder, side of the gun against the back
+            val tilt = if (slot == 0) 10f else -10f
+            val sc = if (type == 3) 0.7f else 0.8f
+            bm.translate(m[7] + (if (slot == 0) -0.03f else 0.03f), m[8] - 0.12f, m[9] - 0.04f - 0.05f * slot)
+            bm.rotate(Vector3.Z, tilt).rotate(Vector3.X, 80f).rotate(Vector3.Z, 90f)
+            bm.scale(sc, sc, sc).translate(0f, 0f, 0.2f)
         }
+        drawProp(tpProps[type], bm)
     }
 
     // ------------------------------------------------------------------
