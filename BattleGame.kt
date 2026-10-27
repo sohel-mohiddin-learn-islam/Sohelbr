@@ -44,7 +44,10 @@ class Bot(val gender: Int, val outfit: Int, val pos: Vector3, var hp: Float = 10
     var yaw = 0f
     var anim = 0f
     var shooting = false
+    var moving = false
     var deadT = 0f
+    var rival: Bot? = null
+    var scanT = 0f
 }
 
 class Block(val x: Float, val z: Float, val hw: Float, val hd: Float, val h: Float) {
@@ -103,6 +106,7 @@ class BattleGame : ApplicationAdapter() {
     private val blocks = ArrayList<Block>()
     private val bots = ArrayList<Bot>()
     private val corpses = ArrayList<Bot>()
+    private val pendingKill = ArrayList<Bot>()
     private val weapons = ArrayList<WDef>()
     private val weaponProps = ArrayList<Prop>()
     private val itemProps = ArrayList<Prop>()
@@ -112,7 +116,12 @@ class BattleGame : ApplicationAdapter() {
     private val rnd = Random()
 
     // human characters: [gender][outfit][frame]  frames 0..3 = run cycle, 4 = aiming
-    private val humans = Array(2) { Array(3) { arrayOfNulls<ModelInstance>(5) } }
+    // frames: 0..7 run, 8..15 run+aim, 16 idle, 17 stand+aim
+    private val humans = Array(2) { Array(3) { arrayOfNulls<ModelInstance>(18) } }
+    private var loadIdx = 0
+    private val loadTotal = 36
+    private var humanLoader: G3dModelLoader? = null
+    private var humanProvider: TextureProvider? = null
     private var humansOk = false
     private val texCache = HashMap<String, Texture>()
 
@@ -133,6 +142,9 @@ class BattleGame : ApplicationAdapter() {
     private var nearLoot: Loot? = null
     private var tpp = true      // third-person camera (like Free Fire); CAM button toggles
     private var pAnim = 0f
+    private var pYaw = 180f
+    private var pMoving = false
+    private var pMoveYaw = 0f
 
     // where the third-person camera sits: behind + over the right shoulder of the player
     private fun tpCamPos(eye: Vector3): Vector3 {
@@ -234,7 +246,6 @@ class BattleGame : ApplicationAdapter() {
         buildWeapons()
         buildItems()
         buildBeams()
-        loadHumans()
 
         Gdx.input.setInputProcessor(object : InputAdapter() {
             override fun touchDown(screenX: Int, screenY: Int, pointer: Int, button: Int): Boolean {
@@ -258,40 +269,69 @@ class BattleGame : ApplicationAdapter() {
         }
     }
 
-    private fun loadHumans() {
+    private fun frameName(f: Int): String =
+        if (f < 8) "run" + f else if (f < 16) "arun" + (f - 8) else if (f == 16) "idle" else "aim"
+
+    // loads one model file per call so the game can show a loading bar (no freezing)
+    private fun loadStep() {
         try {
-            val loader = G3dModelLoader(JsonReader())
-            val provider = object : TextureProvider {
-                override fun load(fileName: String): Texture = getTex(fileName)
-            }
-            val tag = arrayOf("m", "f")
-            for (g in 0..1) {
-                for (f in 0..4) {
-                    val file = "bot_" + tag[g] + "_" + (if (f < 4) "run" + f else "aim") + ".g3dj"
-                    val m = loader.loadModel(Gdx.files.internal(file), provider)
-                    models.add(m)
-                    for (o in 0..2) {
-                        val inst = ModelInstance(m)
-                        inst.getMaterial("skin").set(TextureAttribute.createDiffuse(getTex("bot_" + tag[g] + "_" + o + ".jpg")))
-                        humans[g][o][f] = inst
-                    }
+            if (humanLoader == null) {
+                humanLoader = G3dModelLoader(JsonReader())
+                humanProvider = object : TextureProvider {
+                    override fun load(fileName: String): Texture = getTex(fileName)
                 }
             }
-            humansOk = true
+            val tag = arrayOf("m", "f")
+            val g = loadIdx / 18
+            val f = loadIdx % 18
+            val file = "bot_" + tag[g] + "_" + frameName(f) + ".g3dj"
+            val m = humanLoader!!.loadModel(Gdx.files.internal(file), humanProvider)
+            models.add(m)
+            for (o in 0..2) {
+                val inst = ModelInstance(m)
+                inst.getMaterial("skin").set(TextureAttribute.createDiffuse(getTex("bot_" + tag[g] + "_" + o + ".jpg")))
+                humans[g][o][f] = inst
+            }
+            loadIdx++
+            if (loadIdx >= loadTotal) humansOk = true
         } catch (e: Throwable) {
             Gdx.app.error("BattleGame", "Could not load character models", e)
             humansOk = false
+            loadIdx = loadTotal
         }
     }
 
+    private fun drawLoading(w: Float, h: Float) {
+        Gdx.gl.glClearColor(0.05f, 0.08f, 0.05f, 1f)
+        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
+        shapes.setColor(0.25f, 0.25f, 0.25f, 1f)
+        shapes.rect(w * 0.25f, h * 0.45f, w * 0.5f, 24f)
+        shapes.setColor(0.3f, 0.9f, 0.3f, 1f)
+        shapes.rect(w * 0.25f, h * 0.45f, w * 0.5f * loadIdx / loadTotal, 24f)
+        shapes.end()
+        sb.begin()
+        centered("Loading soldiers...", h * 0.6f, w)
+        sb.end()
+    }
+
+    // turn angle a toward b by at most step degrees (shortest way)
+    private fun turnTo(a: Float, b: Float, step: Float): Float {
+        var d = (b - a) % 360f
+        if (d > 180f) d -= 360f
+        if (d < -180f) d += 360f
+        return if (abs(d) <= step) b else a + (if (d > 0f) step else -step)
+    }
+
     private fun drawBot(b: Bot, frame: Int, fall: Float) {
-        val ins = if (humansOk) humans[b.gender][b.outfit][frame] else null
+        val ins = if (humansOk) humans[b.gender][b.outfit][frame.coerceIn(0, 17)] else null
         if (ins == null) {
             boxInst.transform.setToTranslation(b.pos.x, 1f, b.pos.z)
             batch.render(boxInst, env)
             return
         }
         ins.transform.setToTranslation(b.pos.x, 0f, b.pos.z).rotate(Vector3.Y, b.yaw)
+        if (b.moving && fall <= 0f) ins.transform.rotate(Vector3.X, 5f)
         if (fall > 0f) ins.transform.rotate(Vector3.X, -90f * fall)
         batch.render(ins, env)
     }
@@ -625,6 +665,8 @@ class BattleGame : ApplicationAdapter() {
         kills = 0
         yaw = 0f
         pitch = 0f
+        pYaw = 180f
+        pMoving = false
         hurtFlash = 0f
         hitMark = 0f
         hitHead = false
@@ -799,6 +841,12 @@ class BattleGame : ApplicationAdapter() {
         val h = Gdx.graphics.height.toFloat()
         gameTime += dt
         msgT -= dt
+        if (loadIdx < loadTotal) {
+            taps.clear()
+            loadStep()
+            drawLoading(w, h)
+            return
+        }
 
         // screen-space (y down) control layout
         val joyX = w * 0.18f
@@ -854,13 +902,18 @@ class BattleGame : ApplicationAdapter() {
                     knobY = joyY - my * joyR
                 } else {
                     yaw -= Gdx.input.getDeltaX(i) * 0.2f
-                    pitch = (pitch - Gdx.input.getDeltaY(i) * 0.2f).coerceIn(-80f, 80f)
+                    pitch = (pitch - Gdx.input.getDeltaY(i) * 0.2f).coerceIn(if (tpp) -55f else -80f, if (tpp) 35f else 80f)
                 }
             }
 
             val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, yaw)
             val right = Vector3(fwd).crs(Vector3.Y)
             val speed = 8f
+            pMoving = (mx * mx + my * my) > 0.04f
+            if (pMoving) {
+                val vel = Vector3(fwd).scl(my).add(Vector3(right).scl(mx))
+                pMoveYaw = atan2(vel.x, vel.z) * 57.29578f
+            }
             cam.position.add(fwd.scl(my * speed * dt)).add(right.scl(mx * speed * dt))
             cam.position.x = cam.position.x.coerceIn(-495f, 495f)
             cam.position.z = cam.position.z.coerceIn(-495f, 495f)
@@ -904,6 +957,7 @@ class BattleGame : ApplicationAdapter() {
                     swapWeapon()
                 } else if (inCircle(tx, ty, camX, camY, camR * 1.15f)) {
                     tpp = !tpp
+                    pitch = pitch.coerceIn(if (tpp) -55f else -80f, if (tpp) 35f else 80f)
                 } else {
                     val nl = nearLoot
                     if (nl != null && inCircle(tx, ty, pickX, pickY, pickR * 1.15f)) pickupWeapon(nl)
@@ -1000,6 +1054,7 @@ class BattleGame : ApplicationAdapter() {
             val it = bots.iterator()
             while (it.hasNext()) {
                 val b = it.next()
+                if (b.hp <= 0f) continue
                 val zdx = b.pos.x - zoneCx
                 val zdz = b.pos.z - zoneCz
                 val botOut = sqrt(zdx * zdx + zdz * zdz) > zoneR
@@ -1019,6 +1074,8 @@ class BattleGame : ApplicationAdapter() {
                 var speed = 2.5f
                 var move = true
                 var facePlayer = false
+                var rivalFire = false
+                var faceYaw = b.yaw
 
                 if (botOut) {
                     b.target.set(zoneCx, 0f, zoneCz)
@@ -1029,15 +1086,47 @@ class BattleGame : ApplicationAdapter() {
                     facePlayer = true
                     if (toP < 12f || los) move = false
                 } else {
-                    b.retarget -= dt
-                    val tdx = b.target.x - b.pos.x
-                    val tdz = b.target.z - b.pos.z
-                    if (b.retarget <= 0f || tdx * tdx + tdz * tdz < 9f) {
-                        val a = rnd.nextFloat() * 6.2831853f
-                        val d = sqrt(rnd.nextFloat()) * zoneR * 0.8f
-                        b.target.set((zoneCx + cos(a) * d).coerceIn(-480f, 480f), 0f,
-                                     (zoneCz + sin(a) * d).coerceIn(-480f, 480f))
-                        b.retarget = 6f + rnd.nextFloat() * 6f
+                    // look for another bot to fight
+                    b.scanT -= dt
+                    if (b.scanT <= 0f) {
+                        b.scanT = 0.4f + rnd.nextFloat() * 0.3f
+                        var rv: Bot? = null
+                        var rd = 40f
+                        for (o in bots) {
+                            if (o === b || o.hp <= 0f) continue
+                            val ox = o.pos.x - b.pos.x
+                            val oz = o.pos.z - b.pos.z
+                            val od = sqrt(ox * ox + oz * oz)
+                            if (od < rd && hasLos(Vector3(b.pos.x, 1.5f, b.pos.z), Vector3(o.pos.x, 1.5f, o.pos.z))) {
+                                rd = od
+                                rv = o
+                            }
+                        }
+                        b.rival = rv
+                    }
+                    val rv = b.rival
+                    if (rv != null && rv.hp > 0f && bots.contains(rv)) {
+                        val ox = rv.pos.x - b.pos.x
+                        val oz = rv.pos.z - b.pos.z
+                        if (ox * ox + oz * oz < 45f * 45f) {
+                            faceYaw = atan2(ox, oz) * 57.29578f
+                            move = false
+                            rivalFire = true
+                            rv.hp -= 6f * dt
+                            if (rv.hp <= 0f && !pendingKill.contains(rv)) pendingKill.add(rv)
+                        } else b.rival = null
+                    } else b.rival = null
+                    if (!rivalFire) {
+                        b.retarget -= dt
+                        val tdx = b.target.x - b.pos.x
+                        val tdz = b.target.z - b.pos.z
+                        if (b.retarget <= 0f || tdx * tdx + tdz * tdz < 9f) {
+                            val a = rnd.nextFloat() * 6.2831853f
+                            val d = sqrt(rnd.nextFloat()) * zoneR * 0.8f
+                            b.target.set((zoneCx + cos(a) * d).coerceIn(-480f, 480f), 0f,
+                                         (zoneCz + sin(a) * d).coerceIn(-480f, 480f))
+                            b.retarget = 6f + rnd.nextFloat() * 6f
+                        }
                     }
                 }
 
@@ -1046,25 +1135,34 @@ class BattleGame : ApplicationAdapter() {
                     val dir = Vector3(b.target.x - b.pos.x, 0f, b.target.z - b.pos.z)
                     if (dir.len() > 0.5f) {
                         dir.nor()
-                        if (!facePlayer) b.yaw = atan2(dir.x, dir.z) * 57.29578f
+                        faceYaw = atan2(dir.x, dir.z) * 57.29578f
                         dir.scl(speed * dt)
                         b.pos.add(dir)
                         moved = true
                     }
                 }
-                if (facePlayer) b.yaw = atan2(toPx, toPz) * 57.29578f
+                if (facePlayer && (los || !moved)) faceYaw = atan2(toPx, toPz) * 57.29578f
+                b.yaw = turnTo(b.yaw, faceYaw, 480f * dt)
                 b.pos.x = b.pos.x.coerceIn(-495f, 495f)
                 b.pos.z = b.pos.z.coerceIn(-495f, 495f)
                 collide(b.pos, 0.8f)
 
-                b.shooting = los
+                b.shooting = los || rivalFire
+                b.moving = moved
+                if (moved) b.anim += dt * speed / 0.42f
                 if (los) {
                     hurt(5f * dt)
                     damaged = true
-                } else if (moved) {
-                    b.anim += dt * speed * 1.7f
                 }
             }
+            for (o in pendingKill) {
+                if (bots.remove(o)) {
+                    killBot(o)
+                    msg = "A bot was eliminated"
+                    msgT = 1.2f
+                }
+            }
+            pendingKill.clear()
             if (!damaged) hp = minOf(100f, hp + 1.5f * dt)
             if (bots.isEmpty()) won = true
         }
@@ -1089,17 +1187,20 @@ class BattleGame : ApplicationAdapter() {
         batch.begin(cam)
         batch.render(buildings, env)
         if (showBody) {
-            val moving = (mx * mx + my * my) > 0.04f
-            if (moving) pAnim += dt * 8f * 1.7f
-            val pf = if (flash > 0f || firing) 4 else if (moving) (pAnim.toInt() and 3) else 0
+            val moving = pMoving
+            val shoot = flash > 0f || firing
+            if (moving) pAnim += dt * 8f / 0.42f
+            val tgt = if (shoot) yaw + 180f else if (moving) pMoveYaw else pYaw
+            pYaw = turnTo(pYaw, tgt, 720f * dt)
+            val pf = if (shoot) (if (moving) 8 + (pAnim.toInt() and 7) else 17) else if (moving) (pAnim.toInt() and 7) else 16
             val pi = humans[0][0][pf]
             if (pi != null) {
-                val py = yaw + 180f
-                pi.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, py)
+                pi.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, pYaw)
+                if (moving) pi.transform.rotate(Vector3.X, 5f)
                 batch.render(pi, env)
                 if (flash > 0f) {
                     val mz = muz[0]
-                    flashInst.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, py).translate(mz[0], mz[1], mz[2])
+                    flashInst.transform.setToTranslation(eyeP.x, 0f, eyeP.z).rotate(Vector3.Y, pYaw).translate(mz[0], mz[1], mz[2])
                     batch.render(flashInst, env)
                 }
             }
@@ -1109,7 +1210,7 @@ class BattleGame : ApplicationAdapter() {
             val bdz = b.pos.z - cam.position.z
             if (bdx * bdx + bdz * bdz > 250f * 250f) continue
             if (!cam.frustum.sphereInFrustum(b.pos.x, 1f, b.pos.z, 1.8f)) continue
-            drawBot(b, if (b.shooting) 4 else (b.anim.toInt() and 3), 0f)
+            drawBot(b, if (b.shooting) (if (b.moving) 8 + (b.anim.toInt() and 7) else 17) else if (b.moving) (b.anim.toInt() and 7) else 16, 0f)
             if (b.shooting && ((gameTime * 18f).toInt() + b.outfit) % 2 == 0) {
                 val mz = muz[b.gender]
                 flashInst.transform.setToTranslation(b.pos.x, 0f, b.pos.z).rotate(Vector3.Y, b.yaw).translate(mz[0], mz[1], mz[2])
@@ -1124,7 +1225,7 @@ class BattleGame : ApplicationAdapter() {
                 ci.remove()
                 continue
             }
-            drawBot(c, 4, minOf(c.deadT / 0.45f, 1f))
+            drawBot(c, 17, minOf(c.deadT / 0.45f, 1f))
         }
         for (l in loot) {
             val dx = l.x - cam.position.x
