@@ -143,6 +143,8 @@ class BattleGame : ApplicationAdapter() {
     private var dropVy = 0f
     private lateinit var planeProp: Prop
     private lateinit var canopy: ModelInstance
+    private var planeInst: ModelInstance? = null
+    private var tpLen = 3.2f
     // grip point (in gun space) and distance between the two hands for each gun
     private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f)
     private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f)
@@ -186,16 +188,24 @@ class BattleGame : ApplicationAdapter() {
     private var pMoving = false
     private var pMoveYaw = 0f
 
-    // where the third-person camera sits: behind + over the right shoulder of the player
-    private fun tpCamPos(eye: Vector3): Vector3 {
+    // Free Fire style camera: orbits a pivot at the player's shoulders, a bit to the right, pulled in by walls
+    private fun tpWanted(eye: Vector3): Float {
+        val pv = Vector3(eye).add(0f, -0.15f, 0f)
         val back = Vector3(cam.direction).scl(-1f)
         val rgt = Vector3(cam.direction).crs(Vector3.Y).nor()
-        val off = Vector3(back).scl(3.4f).add(rgt.scl(0.7f)).add(0f, 0.5f, 0f)
+        val off = Vector3(back).scl(3.1f).add(rgt.scl(0.55f)).add(0f, 0.45f, 0f)
         val len = off.len()
-        val dirN = Vector3(off).nor()
-        val wd = wallDist(Ray(Vector3(eye), dirN), len)
-        val use = minOf(len, wd - 0.4f).coerceAtLeast(0.5f)
-        val p = Vector3(eye).add(dirN.scl(use))
+        val wd = wallDist(Ray(pv, Vector3(off).nor()), len)
+        return minOf(len, wd - 0.4f).coerceAtLeast(0.5f)
+    }
+
+    private fun tpCamPos(eye: Vector3): Vector3 {
+        val pv = Vector3(eye).add(0f, -0.15f, 0f)
+        val back = Vector3(cam.direction).scl(-1f)
+        val rgt = Vector3(cam.direction).crs(Vector3.Y).nor()
+        val off = Vector3(back).scl(3.1f).add(rgt.scl(0.55f)).add(0f, 0.45f, 0f)
+        val full = off.len()
+        val p = pv.add(off.nor().scl(minOf(tpLen, full)))
         if (p.y < 0.4f) p.y = 0.4f
         return p
     }
@@ -346,6 +356,13 @@ class BattleGame : ApplicationAdapter() {
                     humansOk = true
                     for (b in bots) if (b.actor == null) b.actor = makeActor(b.gender, b.outfit)
                     pActor = makeActor(0, 0)
+                    try {
+                        val pmod = loadModelFile("plane.g3dj")
+                        for (mt in pmod.materials) mt.set(IntAttribute.createCullFace(0))
+                        planeInst = ModelInstance(pmod)
+                    } catch (e: Throwable) {
+                        Gdx.app.error("BattleGame", "plane model missing, using simple plane", e)
+                    }
                 }
             }
             loadIdx++
@@ -1510,14 +1527,22 @@ class BattleGame : ApplicationAdapter() {
         val pa = pActor
         val showBody = tpp && humansOk && pa != null && dropState > 0
         if (tpp) {
+            val want = tpWanted(eyeP)
+            tpLen = if (want < tpLen) want else tpLen + (want - tpLen) * minOf(1f, dt * 5f)
             cam.position.set(tpCamPos(eyeP))
+            val wantFov = if (sprint && pMoving) 74f else 67f
+            cam.fieldOfView += (wantFov - cam.fieldOfView) * minOf(1f, dt * 4f)
             cam.update()
         }
         batch.begin(cam)
         batch.render(buildings, env)
         if (planeActive) {
             val pm = Matrix4().translate(planeX, planeY, planeZ).rotate(Vector3.Y, planeYaw)
-            drawProp(planeProp, pm)
+            val pi = planeInst
+            if (pi != null) {
+                pi.transform.set(pm)
+                batch.render(pi, env)
+            } else drawProp(planeProp, pm)
         }
         if (dropState == 2) {
             canopy.transform.setToTranslation(eyeP.x, eyeP.y + 3.4f, eyeP.z)
