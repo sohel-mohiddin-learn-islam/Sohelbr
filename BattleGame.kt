@@ -85,8 +85,8 @@ class BattleGame : ApplicationAdapter() {
     // 1f = real time (20 min match). Set 10f to test the whole zone cycle in 2 minutes.
     private val timeScale = 1f
     private val botCount = 49
-    private val startRadius = 1130f
-    private val zoneRadii = floatArrayOf(650f, 380f, 210f, 110f, 45f, 0f)
+    private val startRadius = 1700f
+    private val zoneRadii = floatArrayOf(1000f, 600f, 330f, 170f, 70f, 0f)
     private val holdTimes = floatArrayOf(220f, 150f, 120f, 90f, 70f, 60f)
     private val shrinkTimes = floatArrayOf(120f, 100f, 90f, 70f, 50f, 60f)
     private val zoneDamage = floatArrayOf(1f, 2f, 4f, 6f, 8f, 10f)
@@ -136,6 +136,7 @@ class BattleGame : ApplicationAdapter() {
     private var planeX = 0f
     private var planeZ = 0f
     private val planeY = 350f
+    private var mapOpen = false
     private lateinit var world: TerrainWorld
     private var planeDX = 1f
     private var planeDZ = 0f
@@ -250,7 +251,7 @@ class BattleGame : ApplicationAdapter() {
 
         cam = PerspectiveCamera(67f, Gdx.graphics.width.toFloat(), Gdx.graphics.height.toFloat())
         cam.near = 0.5f
-        cam.far = 900f
+        cam.far = 1000f
 
         gunCam = PerspectiveCamera(55f, Gdx.graphics.width.toFloat(), Gdx.graphics.height.toFloat())
         gunCam.near = 0.05f
@@ -695,7 +696,7 @@ class BattleGame : ApplicationAdapter() {
     private fun updateDrop(dt: Float, mx: Float, my: Float, fwd: Vector3, right: Vector3) {
         if (dropState == 0) {
             cam.position.set(planeX, planeY - 1.7f, planeZ)
-            if (planeX * planeDX + planeZ * planeDZ > 1050f) startFreefall()
+            if (planeX * planeDX + planeZ * planeDZ > world.MW / 2f + 160f) startFreefall()
             return
         }
         val hs = if (dropState == 1) 30f else 13f
@@ -707,8 +708,8 @@ class BattleGame : ApplicationAdapter() {
             dropVy += (-7f - dropVy) * minOf(1f, 3f * dt)
         }
         cam.position.y += dropVy * dt
-        cam.position.x = cam.position.x.coerceIn(-955f, 955f)
-        cam.position.z = cam.position.z.coerceIn(-495f, 495f)
+        cam.position.x = cam.position.x.coerceIn(-world.maxX, world.maxX)
+        cam.position.z = cam.position.z.coerceIn(-world.maxZ, world.maxZ)
         if (cam.position.y <= world.h(cam.position.x, cam.position.z) + 1.7f) {
             snapToLand(cam.position)
             cam.position.y = world.h(cam.position.x, cam.position.z) + 1.7f
@@ -743,7 +744,7 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun addLoot(kind: Int, x: Float, z: Float) {
-        val p = Vector3(x.coerceIn(-950f, 950f), 1f, z.coerceIn(-490f, 490f))
+        val p = Vector3(x.coerceIn(-world.maxX, world.maxX), 1f, z.coerceIn(-world.maxZ, world.maxZ))
         collide(p, 1.2f)
         if (!world.walkable(p.x, p.z) || world.h(p.x, p.z) < 0.4f) return
         val mag = if (kind <= 3) weapons[kind].mag else 0
@@ -752,6 +753,12 @@ class BattleGame : ApplicationAdapter() {
 
     private fun spawnLoot(n: Int) {
         for (i in 0 until n) {
+            if (world.houses.isNotEmpty() && rnd.nextInt(100) < 62) {
+                // inside a house you can walk into
+                val hs = world.houses[rnd.nextInt(world.houses.size)]
+                addLoot(randKind(), hs[0] + (rnd.nextFloat() - 0.5f) * (hs[2] - 1.6f), hs[1] + (rnd.nextFloat() - 0.5f) * (hs[3] - 1.6f))
+                continue
+            }
             val b = blocks[rnd.nextInt(blocks.size)]
             val side = if (rnd.nextBoolean()) 1f else -1f
             val x = b.x + side * (b.hw + 1.5f + rnd.nextFloat() * 2f)
@@ -761,7 +768,7 @@ class BattleGame : ApplicationAdapter() {
         // extra guns lying around in the open
         for (i in 0 until 14) {
             addLoot(if (i < 8) randWeapon() else randKind(),
-                (rnd.nextFloat() - 0.5f) * 1800f, (rnd.nextFloat() - 0.5f) * 900f)
+                (rnd.nextFloat() - 0.5f) * (world.MW - 100f), (rnd.nextFloat() - 0.5f) * (world.MH - 100f))
         }
     }
 
@@ -945,9 +952,9 @@ class BattleGame : ApplicationAdapter() {
             val a = (if (rnd.nextBoolean()) 0f else 3.1415927f) + (rnd.nextFloat() - 0.5f) * 1.3f
             planeDX = cos(a)
             planeDZ = sin(a)
-            val off = (rnd.nextFloat() - 0.5f) * 500f
-            planeX = -planeDX * 1150f - planeDZ * off
-            planeZ = -planeDZ * 1150f + planeDX * off
+            val off = (rnd.nextFloat() - 0.5f) * 700f
+            planeX = -planeDX * (world.MW / 2f + 200f) - planeDZ * off
+            planeZ = -planeDZ * (world.MW / 2f + 200f) + planeDX * off
             planeYaw = atan2(-planeDX, -planeDZ) * 57.29578f
             yaw = planeYaw
             pitch = -15f
@@ -971,11 +978,12 @@ class BattleGame : ApplicationAdapter() {
         corpses.clear()
         spawnBots(botCount)
         loot.clear()
-        spawnLoot(300)
+        spawnLoot(520)
     }
 
     // push a position out of any building (circle vs box, top-down)
     private fun collide(p: Vector3, rad: Float) {
+        world.collideCircles(p, rad)
         for (b in blocks) {
             val nx = p.x.coerceIn(b.x - b.hw, b.x + b.hw)
             val nz = p.z.coerceIn(b.z - b.hd, b.z + b.hd)
@@ -1079,7 +1087,7 @@ class BattleGame : ApplicationAdapter() {
         toCx = fromCx + cos(a) * d
         toCz = fromCz + sin(a) * d
         var tries = 0
-        while (tries < 40 && (world.h(toCx, toCz) < 1f || abs(toCx) > 900f || abs(toCz) > 470f)) {
+        while (tries < 40 && (world.h(toCx, toCz) < 1f || abs(toCx) > world.MW / 2f - 80f || abs(toCz) > world.MH / 2f - 80f)) {
             val a2 = rnd.nextFloat() * 6.2831853f
             val d2 = sqrt(rnd.nextFloat()) * maxOff
             toCx = fromCx + cos(a2) * d2
@@ -1119,7 +1127,7 @@ class BattleGame : ApplicationAdapter() {
         for (i in 0 until n) {
             val p = Vector3()
             do {
-                p.set((rnd.nextFloat() - 0.5f) * 1840f, 0f, (rnd.nextFloat() - 0.5f) * 940f)
+                p.set((rnd.nextFloat() - 0.5f) * (world.MW - 80f), 0f, (rnd.nextFloat() - 0.5f) * (world.MH - 80f))
             } while (!world.walkable(p.x, p.z) || world.h(p.x, p.z) < 1.2f)
             collide(p, 0.8f)
             p.y = world.h(p.x, p.z)
@@ -1195,6 +1203,9 @@ class BattleGame : ApplicationAdapter() {
         val camX = w * 0.74f
         val camY = h * 0.44f
         val camR = h * 0.065f
+        val mapX = 170f          // round minimap (screen coordinates, y down)
+        val mapY = 170f
+        val mapR = 150f
         // Free Fire style layout: weapon panel top-right, 2 small weapon boxes under it
         val panelW = 440f
         val panelH = 135f
@@ -1247,6 +1258,7 @@ class BattleGame : ApplicationAdapter() {
                     inCircle(x, y, runX, runY, runR * 1.15f) ||
                     inCircle(x, y, jumpX, jumpY, jumpR * 1.15f) ||
                     inCircle(x, y, camX, camY, camR * 1.15f) ||
+                    inCircle(x, y, mapX, mapY, mapR) ||
                     slotHit(x, y) >= 0 ||
                     (nearLoot != null && inCircle(x, y, pickX, pickY, pickR * 1.15f))) {
                     // finger is on a button, not on movement or look
@@ -1286,14 +1298,14 @@ class BattleGame : ApplicationAdapter() {
                 } else {
                     cam.position.y += (ge - cam.position.y) * minOf(1f, dt * 18f)
                 }
-                cam.position.x = cam.position.x.coerceIn(-955f, 955f)
-                cam.position.z = cam.position.z.coerceIn(-495f, 495f)
+                cam.position.x = cam.position.x.coerceIn(-world.maxX, world.maxX)
+                cam.position.z = cam.position.z.coerceIn(-world.maxZ, world.maxZ)
                 collide(cam.position, 0.6f)
             }
             if (planeActive) {
-                planeX += planeDX * 60f * dt
-                planeZ += planeDZ * 60f * dt
-                if (dropState > 0 && (abs(planeX) > 1500f || abs(planeZ) > 1500f)) planeActive = false
+                planeX += planeDX * 75f * dt
+                planeZ += planeDZ * 75f * dt
+                if (dropState > 0 && (abs(planeX) > world.MW || abs(planeZ) > world.MW)) planeActive = false
             }
 
             updateZone(dt * timeScale)
@@ -1328,7 +1340,11 @@ class BattleGame : ApplicationAdapter() {
             for (t in taps) {
                 val tx = t[0]
                 val ty = t[1]
-                if (inCircle(tx, ty, reloadX, reloadY, reloadR * 1.15f)) {
+                if (mapOpen) {
+                    mapOpen = false
+                } else if (inCircle(tx, ty, mapX, mapY, mapR)) {
+                    mapOpen = true
+                } else if (inCircle(tx, ty, reloadX, reloadY, reloadR * 1.15f)) {
                     tryReload()
                 } else if (inCircle(tx, ty, medX, medY, medR * 1.15f)) {
                     if (medkits > 0 && hp < 100f) {
@@ -1515,8 +1531,8 @@ class BattleGame : ApplicationAdapter() {
                             do {
                                 val a = rnd.nextFloat() * 6.2831853f
                                 val d = sqrt(rnd.nextFloat()) * zoneR * 0.8f
-                                b.target.set((zoneCx + cos(a) * d).coerceIn(-940f, 940f), 0f,
-                                             (zoneCz + sin(a) * d).coerceIn(-480f, 480f))
+                                b.target.set((zoneCx + cos(a) * d).coerceIn(-world.maxX, world.maxX), 0f,
+                                             (zoneCz + sin(a) * d).coerceIn(-world.maxZ, world.maxZ))
                                 tt++
                             } while (tt < 12 && (!world.walkable(b.target.x, b.target.z) || world.h(b.target.x, b.target.z) < 1f))
                             b.retarget = 6f + rnd.nextFloat() * 6f
@@ -1542,8 +1558,8 @@ class BattleGame : ApplicationAdapter() {
                 }
                 if (facePlayer && (los || !moved)) faceYaw = atan2(toPx, toPz) * 57.29578f
                 b.yaw = turnTo(b.yaw, faceYaw, 480f * dt)
-                b.pos.x = b.pos.x.coerceIn(-955f, 955f)
-                b.pos.z = b.pos.z.coerceIn(-495f, 495f)
+                b.pos.x = b.pos.x.coerceIn(-world.maxX, world.maxX)
+                b.pos.z = b.pos.z.coerceIn(-world.maxZ, world.maxZ)
                 collide(b.pos, 0.8f)
                 b.pos.y = world.h(b.pos.x, b.pos.z)
 
@@ -1716,9 +1732,6 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
 
         val nl = nearLoot
-        val ms = 0.2f
-        val mcx = 207f
-        val mcy = h - 115f
 
         shapes.begin(ShapeRenderer.ShapeType.Filled)
         if (outside) {
@@ -1823,51 +1836,104 @@ class BattleGame : ApplicationAdapter() {
             }
         }
 
-        // minimap (top-left)
-        shapes.setColor(0f, 0f, 0f, 0.6f)
-        shapes.rect(mcx - 195f, mcy - 103f, 390f, 206f)
+        // round minimap (top-left), centred on you, north is up
+        val mcx = mapX
+        val mcy = h - mapY
+        val mrw = 320f                       // metres shown from the centre to the rim
+        val msc = mapR / mrw
+        shapes.setColor(0f, 0f, 0f, 0.65f)
+        shapes.circle(mcx, mcy, mapR + 5f, 64)
         shapes.end()
         sb.begin()
-        sb.setColor(1f, 1f, 1f, 0.95f)
-        sb.draw(world.colorTex, mcx - 192f, mcy - 100f, 384f, 200f)
-        sb.setColor(1f, 1f, 1f, 1f)
+        run {
+            val segs = 56
+            val vtx = FloatArray(segs * 20)
+            val col = Color(1f, 1f, 1f, 0.97f).toFloatBits()
+            val pxw = cam.position.x
+            val pzw = cam.position.z
+            var o = 0
+            for (k in 0 until segs) {
+                val a0 = k * 6.2831855f / segs
+                val a1 = (k + 1) * 6.2831855f / segs
+                val ox = floatArrayOf(0f, cos(a0) * mapR, cos(a1) * mapR, cos(a1) * mapR)
+                val oy = floatArrayOf(0f, sin(a0) * mapR, sin(a1) * mapR, sin(a1) * mapR)
+                for (q in 0..3) {
+                    vtx[o++] = mcx + ox[q]
+                    vtx[o++] = mcy + oy[q]
+                    vtx[o++] = col
+                    vtx[o++] = (pxw + ox[q] / msc - world.X0) / world.MW
+                    vtx[o++] = (pzw - oy[q] / msc - world.Z0) / world.MH
+                }
+            }
+            sb.draw(world.colorTex, vtx, 0, vtx.size)
+        }
         sb.end()
 
         Gdx.gl.glLineWidth(3f)
         shapes.begin(ShapeRenderer.ShapeType.Line)
-        shapes.setColor(0.3f, 0.5f, 1f, 1f)
-        shapes.circle(mcx + zoneCx * ms, mcy - zoneCz * ms, zoneR * ms, 64)
-        if (!shrinking && !won) {
-            shapes.setColor(1f, 1f, 1f, 1f)
-            shapes.circle(mcx + toCx * ms, mcy - toCz * ms, toR * ms, 64)
+        // zone circles, only the part inside the round map
+        for (pass in 0..1) {
+            if (pass == 1 && (shrinking || won)) break
+            val zx = if (pass == 0) zoneCx else toCx
+            val zz = if (pass == 0) zoneCz else toCz
+            val zr = if (pass == 0) zoneR else toR
+            if (pass == 0) shapes.setColor(0.3f, 0.5f, 1f, 1f) else shapes.setColor(1f, 1f, 1f, 1f)
+            var lx = 0f
+            var ly = 0f
+            var lin = false
+            for (k in 0..96) {
+                val an = k * 6.2831855f / 96f
+                val sx = mcx + (zx + cos(an) * zr - cam.position.x) * msc
+                val sy = mcy - (zz + sin(an) * zr - cam.position.z) * msc
+                val dxm = sx - mcx
+                val dym = sy - mcy
+                val inside = dxm * dxm + dym * dym < (mapR - 2f) * (mapR - 2f)
+                if (k > 0 && inside && lin) shapes.line(lx, ly, sx, sy)
+                lx = sx
+                ly = sy
+                lin = inside
+            }
         }
+        shapes.setColor(1f, 1f, 1f, 0.9f)
+        shapes.circle(mcx, mcy, mapR, 64)
         shapes.end()
 
         shapes.begin(ShapeRenderer.ShapeType.Filled)
+        // towns
+        shapes.setColor(1f, 1f, 1f, 1f)
+        for (tn in world.towns) {
+            val sx = mcx + (tn.x - cam.position.x) * msc
+            val sy = mcy - (tn.z - cam.position.z) * msc
+            val dxm = sx - mcx
+            val dym = sy - mcy
+            if (dxm * dxm + dym * dym < (mapR - 6f) * (mapR - 6f)) shapes.circle(sx, sy, 3.5f)
+        }
         shapes.setColor(1f, 0.2f, 0.2f, 1f)
         for (b in bots) {
             val ddx = b.pos.x - cam.position.x
             val ddz = b.pos.z - cam.position.z
-            if (ddx * ddx + ddz * ddz < 120f * 120f) shapes.circle(mcx + b.pos.x * ms, mcy - b.pos.z * ms, 3f)
+            if (ddx * ddx + ddz * ddz < 120f * 120f) shapes.circle(mcx + ddx * msc, mcy - ddz * msc, 3.5f)
         }
         shapes.setColor(1f, 0.9f, 0.2f, 1f)
         for (l in loot) {
             val ddx = l.x - cam.position.x
             val ddz = l.z - cam.position.z
-            if (ddx * ddx + ddz * ddz < 120f * 120f) shapes.circle(mcx + l.x * ms, mcy - l.z * ms, 2f)
+            if (ddx * ddx + ddz * ddz < 120f * 120f) shapes.circle(mcx + ddx * msc, mcy - ddz * msc, 2.2f)
         }
         if (planeActive) {
-            shapes.setColor(1f, 1f, 1f, 1f)
-            shapes.circle(mcx + planeX * ms, mcy - planeZ * ms, 7f)
+            val ddx = (planeX - cam.position.x) * msc
+            val ddz = (planeZ - cam.position.z) * msc
+            if (ddx * ddx + ddz * ddz < (mapR - 8f) * (mapR - 8f)) {
+                shapes.setColor(1f, 1f, 1f, 1f)
+                shapes.circle(mcx + ddx, mcy - ddz, 7f)
+            }
         }
         shapes.setColor(1f, 1f, 0f, 1f)
-        shapes.circle(mcx + cam.position.x * ms, mcy - cam.position.z * ms, 6f)
+        shapes.circle(mcx, mcy, 6f)
         shapes.end()
         shapes.begin(ShapeRenderer.ShapeType.Line)
         shapes.setColor(1f, 1f, 0f, 1f)
-        val px = mcx + cam.position.x * ms
-        val py = mcy - cam.position.z * ms
-        shapes.line(px, py, px + cam.direction.x * 22f, py - cam.direction.z * 22f)
+        shapes.line(mcx, mcy, mcx + cam.direction.x * 28f, mcy - cam.direction.z * 28f)
         shapes.end()
 
         sb.begin()
@@ -1882,7 +1948,22 @@ class BattleGame : ApplicationAdapter() {
         font.data.setScale(1.4f)
         font.draw(sb, "FPS ${Gdx.graphics.framesPerSecond}", 410f, h - 20f)
         font.data.setScale(1.5f)
-        font.draw(sb, world.placeName(cam.position.x, cam.position.z), 20f, h - 228f)
+        font.draw(sb, world.placeName(cam.position.x, cam.position.z), 20f, h - 345f)
+        font.data.setScale(0.9f)
+        for (tn in world.towns) {
+            val sx = mcx + (tn.x - cam.position.x) * msc
+            val sy = mcy - (tn.z - cam.position.z) * msc
+            val dxm = sx - mcx
+            val dym = sy - mcy
+            if (dxm * dxm + dym * dym < (mapR - 30f) * (mapR - 30f)) {
+                layout.setText(font, tn.name)
+                font.setColor(0f, 0f, 0f, 0.9f)
+                font.draw(sb, tn.name, sx - layout.width / 2f + 1.2f, sy - 6f - 1.2f)
+                font.setColor(1f, 1f, 1f, 1f)
+                font.draw(sb, tn.name, sx - layout.width / 2f, sy - 6f)
+            }
+        }
+        font.data.setScale(1.5f)
         font.draw(sb, "HP ${hp.coerceAtLeast(0f).toInt()}/100", w / 2f - 60f, 38f)
 
         // weapon panel texts
@@ -1927,8 +2008,69 @@ class BattleGame : ApplicationAdapter() {
         else if (won) centered("YOU SURVIVED! Kills: $kills - tap to restart", h * 0.55f, w)
         sb.end()
 
+        if (mapOpen) drawFullMap(w, h)
+
         Gdx.gl.glDisable(GL20.GL_BLEND)
         Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
+    }
+
+    // full screen map with every town name
+    private fun drawFullMap(w: Float, h: Float) {
+        val mw = minOf(w * 0.94f, h * 0.88f * world.MW / world.MH)
+        val mh = mw * world.MH / world.MW
+        val mx0 = (w - mw) / 2f
+        val my0 = (h - mh) / 2f - 10f
+        val fs = mw / world.MW
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
+        shapes.setColor(0f, 0f, 0f, 0.82f)
+        shapes.rect(0f, 0f, w, h)
+        shapes.end()
+        sb.begin()
+        sb.setColor(1f, 1f, 1f, 1f)
+        sb.draw(world.colorTex, mx0, my0, mw, mh)
+        sb.end()
+        Gdx.gl.glLineWidth(3f)
+        shapes.begin(ShapeRenderer.ShapeType.Line)
+        shapes.setColor(0.3f, 0.5f, 1f, 1f)
+        shapes.circle(mx0 + (zoneCx - world.X0) * fs, my0 + mh - (zoneCz - world.Z0) * fs, zoneR * fs, 96)
+        if (!shrinking && !won) {
+            shapes.setColor(1f, 1f, 1f, 1f)
+            shapes.circle(mx0 + (toCx - world.X0) * fs, my0 + mh - (toCz - world.Z0) * fs, toR * fs, 96)
+        }
+        shapes.setColor(1f, 1f, 1f, 0.8f)
+        shapes.rect(mx0, my0, mw, mh)
+        shapes.end()
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
+        shapes.setColor(1f, 1f, 1f, 1f)
+        for (tn in world.towns) shapes.circle(mx0 + (tn.x - world.X0) * fs, my0 + mh - (tn.z - world.Z0) * fs, 4f)
+        val ppx = mx0 + (cam.position.x - world.X0) * fs
+        val ppy = my0 + mh - (cam.position.z - world.Z0) * fs
+        shapes.setColor(1f, 1f, 0f, 1f)
+        shapes.circle(ppx, ppy, 9f)
+        if (planeActive) {
+            shapes.setColor(1f, 1f, 1f, 1f)
+            shapes.circle(mx0 + (planeX - world.X0) * fs, my0 + mh - (planeZ - world.Z0) * fs, 8f)
+        }
+        shapes.end()
+        shapes.begin(ShapeRenderer.ShapeType.Line)
+        shapes.setColor(1f, 1f, 0f, 1f)
+        shapes.line(ppx, ppy, ppx + cam.direction.x * 34f, ppy - cam.direction.z * 34f)
+        shapes.end()
+        sb.begin()
+        font.data.setScale(1.15f)
+        for (tn in world.towns) {
+            val sx = mx0 + (tn.x - world.X0) * fs
+            val sy = my0 + mh - (tn.z - world.Z0) * fs
+            layout.setText(font, tn.name)
+            font.setColor(0f, 0f, 0f, 0.95f)
+            font.draw(sb, tn.name, sx - layout.width / 2f + 1.5f, sy + 24f - 1.5f)
+            font.setColor(1f, 1f, 1f, 1f)
+            font.draw(sb, tn.name, sx - layout.width / 2f, sy + 24f)
+        }
+        font.data.setScale(2f)
+        centered("REALM OF ALMARAKAH  -  tap to close", my0 + mh + 42f, w)
+        font.data.setScale(3f)
+        sb.end()
     }
 
     override fun dispose() {
