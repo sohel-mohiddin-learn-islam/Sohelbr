@@ -1526,7 +1526,12 @@ class BattleGame : ApplicationAdapter() {
         val eyeP = Vector3(cam.position)
         val pa = pActor
         val showBody = tpp && humansOk && pa != null && dropState > 0
-        if (tpp) {
+        if (dropState == 0) {
+            // Free Fire style: camera floats behind and above the plane and can orbit around it
+            cam.position.set(planeX, planeY + 1.5f, planeZ).add(Vector3(cam.direction).scl(-46f))
+            cam.fieldOfView = 67f
+            cam.update()
+        } else if (tpp) {
             val want = tpWanted(eyeP)
             tpLen = if (want < tpLen) want else tpLen + (want - tpLen) * minOf(1f, dt * 5f)
             cam.position.set(tpCamPos(eyeP))
@@ -1839,6 +1844,7 @@ class BattleGame : ApplicationAdapter() {
         label("x$medkits", medX + 38f, h - medY + 40f)
 
         if (dropState < 3) centered("ALTITUDE ${(if (dropState == 0) planeY else cam.position.y).toInt()} m", h * 0.28f, w)
+        if (dropState == 0) centered("Still in cabin: ${bots.size + 1}", h * 0.22f, w)
         if (msgT > 0f) centered(msg, h * 0.64f, w)
         if (nl != null) centered("Weapon: " + weapons[nl.kind].name + " - tap PICK", h * 0.34f, w)
 
@@ -1846,7 +1852,7 @@ class BattleGame : ApplicationAdapter() {
         label("RELOAD", reloadX, h - reloadY)
         label(if (tpp) "1ST" else "3RD", camX, h - camY)
         label("RUN", runX, h - runY)
-        label(if (dropState == 0) "DROP" else if (dropState == 1) "CHUTE" else "JUMP", jumpX, h - jumpY)
+        label(if (dropState == 0) "EJECT" else if (dropState == 1) "CHUTE" else "JUMP", jumpX, h - jumpY)
         if (nl != null) label("PICK", pickX, h - pickY)
         font.data.setScale(3f)
 
