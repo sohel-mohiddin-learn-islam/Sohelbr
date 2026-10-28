@@ -1533,6 +1533,9 @@ class BattleGame : ApplicationAdapter() {
             val wantFov = if (sprint && pMoving) 74f else 67f
             cam.fieldOfView += (wantFov - cam.fieldOfView) * minOf(1f, dt * 4f)
             cam.update()
+        } else if (cam.fieldOfView != 67f) {
+            cam.fieldOfView = 67f
+            cam.update()
         }
         batch.begin(cam)
         batch.render(buildings, env)
