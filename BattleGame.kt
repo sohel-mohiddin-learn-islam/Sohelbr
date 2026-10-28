@@ -67,8 +67,8 @@ class Actor(val inst: ModelInstance, val ctrl: AnimationController, val g: Int) 
 
 class ActorMeta(val handAimInv: Matrix4, val G: Vector3, val spineInv: Matrix4, val B: Vector3)
 
-class Block(val x: Float, val z: Float, val hw: Float, val hd: Float, val h: Float) {
-    val box = BoundingBox(Vector3(x - hw, 0f, z - hd), Vector3(x + hw, h, z + hd))
+class Block(val x: Float, val z: Float, val hw: Float, val hd: Float, val h: Float, val y0: Float = 0f) {
+    val box = BoundingBox(Vector3(x - hw, y0, z - hd), Vector3(x + hw, y0 + h, z + hd))
 }
 
 class Part(val inst: ModelInstance, val ox: Float, val oy: Float, val oz: Float, val ry: Float, val rx: Float)
@@ -84,9 +84,9 @@ class BattleGame : ApplicationAdapter() {
     // ---- tuning ----
     // 1f = real time (20 min match). Set 10f to test the whole zone cycle in 2 minutes.
     private val timeScale = 1f
-    private val botCount = 30
-    private val startRadius = 700f
-    private val zoneRadii = floatArrayOf(420f, 250f, 140f, 70f, 30f, 0f)
+    private val botCount = 49
+    private val startRadius = 1130f
+    private val zoneRadii = floatArrayOf(650f, 380f, 210f, 110f, 45f, 0f)
     private val holdTimes = floatArrayOf(220f, 150f, 120f, 90f, 70f, 60f)
     private val shrinkTimes = floatArrayOf(120f, 100f, 90f, 70f, 50f, 60f)
     private val zoneDamage = floatArrayOf(1f, 2f, 4f, 6f, 8f, 10f)
@@ -135,7 +135,8 @@ class BattleGame : ApplicationAdapter() {
     private var dropState = 3
     private var planeX = 0f
     private var planeZ = 0f
-    private val planeY = 150f
+    private val planeY = 350f
+    private lateinit var world: TerrainWorld
     private var planeDX = 1f
     private var planeDZ = 0f
     private var planeYaw = 0f
@@ -206,7 +207,8 @@ class BattleGame : ApplicationAdapter() {
         val off = Vector3(back).scl(3.1f).add(rgt.scl(0.55f)).add(0f, 0.45f, 0f)
         val full = off.len()
         val p = pv.add(off.nor().scl(minOf(tpLen, full)))
-        if (p.y < 0.4f) p.y = 0.4f
+        val gmin = world.h(p.x, p.z) + 0.5f
+        if (p.y < gmin) p.y = gmin
         return p
     }
 
@@ -248,31 +250,17 @@ class BattleGame : ApplicationAdapter() {
 
         cam = PerspectiveCamera(67f, Gdx.graphics.width.toFloat(), Gdx.graphics.height.toFloat())
         cam.near = 0.5f
-        cam.far = 1500f
+        cam.far = 900f
 
         gunCam = PerspectiveCamera(55f, Gdx.graphics.width.toFloat(), Gdx.graphics.height.toFloat())
         gunCam.near = 0.05f
         gunCam.far = 20f
         gunCam.update()
 
-        val ground = mb.createBox(1000f, 0.2f, 1000f,
-            Material(ColorAttribute.createDiffuse(Color.FOREST)), attrs)
-        models.add(ground)
-        buildings.add(ModelInstance(ground).also { it.transform.setToTranslation(0f, -0.1f, 0f) })
-
-        val r = Random(1)
-        for (i in 0 until 200) {
-            val w = 3f + r.nextFloat() * 8f
-            val h = 3f + r.nextFloat() * 12f
-            val d = 3f + r.nextFloat() * 8f
-            val color = Color(0.4f + r.nextFloat() * 0.5f, 0.4f + r.nextFloat() * 0.5f, 0.4f + r.nextFloat() * 0.5f, 1f)
-            val m = mb.createBox(w, h, d, Material(ColorAttribute.createDiffuse(color)), attrs)
-            models.add(m)
-            val x = (r.nextFloat() - 0.5f) * 900f
-            val z = (r.nextFloat() - 0.5f) * 900f
-            buildings.add(ModelInstance(m).also { it.transform.setToTranslation(x, h / 2f, z) })
-            blocks.add(Block(x, z, w / 2f, d / 2f, h))
-        }
+        world = TerrainWorld()
+        world.load()
+        blocks.addAll(world.blocks)
+        env.set(ColorAttribute(ColorAttribute.Fog, 0.5f, 0.8f, 1f, 1f))
 
         // red box = fallback if the character files are missing
         botModel = mb.createBox(1f, 2f, 1f, Material(ColorAttribute.createDiffuse(Color.RED)), attrs)
@@ -707,22 +695,23 @@ class BattleGame : ApplicationAdapter() {
     private fun updateDrop(dt: Float, mx: Float, my: Float, fwd: Vector3, right: Vector3) {
         if (dropState == 0) {
             cam.position.set(planeX, planeY - 1.7f, planeZ)
-            if (abs(planeX) > 500f || abs(planeZ) > 500f) startFreefall()
+            if (planeX * planeDX + planeZ * planeDZ > 1050f) startFreefall()
             return
         }
-        val hs = if (dropState == 1) 22f else 11f
+        val hs = if (dropState == 1) 30f else 13f
         cam.position.add(Vector3(fwd).scl(my * hs * dt)).add(Vector3(right).scl(mx * hs * dt))
         if (dropState == 1) {
             dropVy = maxOf(dropVy - 25f * dt, -40f)
-            if (cam.position.y < 75f) openChute()
+            if (cam.position.y - world.h(cam.position.x, cam.position.z) < 75f) openChute()
         } else {
             dropVy += (-7f - dropVy) * minOf(1f, 3f * dt)
         }
         cam.position.y += dropVy * dt
-        cam.position.x = cam.position.x.coerceIn(-495f, 495f)
+        cam.position.x = cam.position.x.coerceIn(-955f, 955f)
         cam.position.z = cam.position.z.coerceIn(-495f, 495f)
-        if (cam.position.y <= 1.7f) {
-            cam.position.y = 1.7f
+        if (cam.position.y <= world.h(cam.position.x, cam.position.z) + 1.7f) {
+            snapToLand(cam.position)
+            cam.position.y = world.h(cam.position.x, cam.position.z) + 1.7f
             dropState = 3
             dropVy = 0f
             collide(cam.position, 0.6f)
@@ -754,8 +743,9 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun addLoot(kind: Int, x: Float, z: Float) {
-        val p = Vector3(x.coerceIn(-490f, 490f), 1f, z.coerceIn(-490f, 490f))
+        val p = Vector3(x.coerceIn(-950f, 950f), 1f, z.coerceIn(-490f, 490f))
         collide(p, 1.2f)
+        if (!world.walkable(p.x, p.z) || world.h(p.x, p.z) < 0.4f) return
         val mag = if (kind <= 3) weapons[kind].mag else 0
         loot.add(Loot(kind, p.x, p.z, mag))
     }
@@ -768,10 +758,10 @@ class BattleGame : ApplicationAdapter() {
             val z = b.z + (rnd.nextFloat() - 0.5f) * b.hd * 2f
             addLoot(randKind(), x, z)
         }
-        // some loot right near the start so you can arm up quickly
-        for (i in 0 until 6) {
-            addLoot(if (i < 3) randWeapon() else randKind(),
-                (rnd.nextFloat() - 0.5f) * 30f, (rnd.nextFloat() - 0.5f) * 30f)
+        // extra guns lying around in the open
+        for (i in 0 until 14) {
+            addLoot(if (i < 8) randWeapon() else randKind(),
+                (rnd.nextFloat() - 0.5f) * 1800f, (rnd.nextFloat() - 0.5f) * 900f)
         }
     }
 
@@ -952,12 +942,12 @@ class BattleGame : ApplicationAdapter() {
         cam.position.set(0f, 1.7f, 0f)
         collide(cam.position, 0.6f)
         run {
-            val a = rnd.nextFloat() * 6.2831853f
+            val a = (if (rnd.nextBoolean()) 0f else 3.1415927f) + (rnd.nextFloat() - 0.5f) * 1.3f
             planeDX = cos(a)
             planeDZ = sin(a)
-            val off = (rnd.nextFloat() - 0.5f) * 300f
-            planeX = -planeDX * 560f - planeDZ * off
-            planeZ = -planeDZ * 560f + planeDX * off
+            val off = (rnd.nextFloat() - 0.5f) * 500f
+            planeX = -planeDX * 1150f - planeDZ * off
+            planeZ = -planeDZ * 1150f + planeDX * off
             planeYaw = atan2(-planeDX, -planeDZ) * 57.29578f
             yaw = planeYaw
             pitch = -15f
@@ -981,7 +971,7 @@ class BattleGame : ApplicationAdapter() {
         corpses.clear()
         spawnBots(botCount)
         loot.clear()
-        spawnLoot(110)
+        spawnLoot(300)
     }
 
     // push a position out of any building (circle vs box, top-down)
@@ -1025,10 +1015,53 @@ class BattleGame : ApplicationAdapter() {
                 if (d < best) best = d
             }
         }
+        val tr = world.terrainRay(ray.origin.x, ray.origin.y, ray.origin.z, ray.direction.x, ray.direction.y, ray.direction.z, best)
+        if (tr < best) best = tr
         return best
     }
 
+    private fun stepOk(fx: Float, fz: Float, tx: Float, tz: Float): Boolean {
+        if (!world.walkable(tx, tz)) return false
+        val dx = tx - fx
+        val dz = tz - fz
+        val dist = sqrt(dx * dx + dz * dz)
+        if (dist < 0.0001f) return true
+        return (world.h(tx, tz) - world.h(fx, fz)) / dist < 0.9f
+    }
+
+    // walk over the terrain: blocked by deep water and cliffs, slides along them
+    private fun moveOnLand(p: Vector3, dx: Float, dz: Float) {
+        if (stepOk(p.x, p.z, p.x + dx, p.z + dz)) {
+            p.x += dx
+            p.z += dz
+        } else if (stepOk(p.x, p.z, p.x + dx, p.z)) {
+            p.x += dx
+        } else if (stepOk(p.x, p.z, p.x, p.z + dz)) {
+            p.z += dz
+        }
+    }
+
+    // find dry land near a point (used when the parachute lands in the sea)
+    private fun snapToLand(p: Vector3) {
+        if (world.walkable(p.x, p.z)) return
+        var r = 6f
+        while (r < 400f) {
+            for (k in 0 until 24) {
+                val a = k * 0.2618f
+                val x = p.x + cos(a) * r
+                val z = p.z + sin(a) * r
+                if (world.walkable(x, z) && world.h(x, z) > 0.6f) {
+                    p.x = x
+                    p.z = z
+                    return
+                }
+            }
+            r += 6f
+        }
+    }
+
     private fun hasLos(a: Vector3, b: Vector3): Boolean {
+        if (world.terrainBlocks(a.x, a.y, a.z, b.x, b.y, b.z)) return false
         for (bl in blocks) {
             if (segHitsBox(a, b, bl.box)) return false
         }
@@ -1045,6 +1078,14 @@ class BattleGame : ApplicationAdapter() {
         val d = sqrt(rnd.nextFloat()) * maxOff
         toCx = fromCx + cos(a) * d
         toCz = fromCz + sin(a) * d
+        var tries = 0
+        while (tries < 40 && (world.h(toCx, toCz) < 1f || abs(toCx) > 900f || abs(toCz) > 470f)) {
+            val a2 = rnd.nextFloat() * 6.2831853f
+            val d2 = sqrt(rnd.nextFloat()) * maxOff
+            toCx = fromCx + cos(a2) * d2
+            toCz = fromCz + sin(a2) * d2
+            tries++
+        }
     }
 
     private fun updateZone(dt: Float) {
@@ -1078,9 +1119,10 @@ class BattleGame : ApplicationAdapter() {
         for (i in 0 until n) {
             val p = Vector3()
             do {
-                p.set((rnd.nextFloat() - 0.5f) * 960f, 0f, (rnd.nextFloat() - 0.5f) * 960f)
-            } while (Vector3(p.x - cam.position.x, 0f, p.z - cam.position.z).len() < 70f)
+                p.set((rnd.nextFloat() - 0.5f) * 1840f, 0f, (rnd.nextFloat() - 0.5f) * 940f)
+            } while (!world.walkable(p.x, p.z) || world.h(p.x, p.z) < 1.2f)
             collide(p, 0.8f)
+            p.y = world.h(p.x, p.z)
             val bot = Bot(rnd.nextInt(2), rnd.nextInt(3), p)
             bot.target.set(p)
             if (humansOk) bot.actor = makeActor(bot.gender, bot.outfit)
@@ -1231,23 +1273,27 @@ class BattleGame : ApplicationAdapter() {
             if (dropState < 3) {
                 updateDrop(dt, mx, my, fwd, right)
             } else {
-                cam.position.add(fwd.scl(my * speed * dt)).add(right.scl(mx * speed * dt))
-                if (cam.position.y > 1.7f || jumpV != 0f) {
+                val stepV = Vector3(fwd).scl(my * speed * dt).add(Vector3(right).scl(mx * speed * dt))
+                moveOnLand(cam.position, stepV.x, stepV.z)
+                val ge = world.h(cam.position.x, cam.position.z) + 1.7f
+                if (jumpV != 0f || cam.position.y > ge + 0.6f) {
                     jumpV -= 18f * dt
                     cam.position.y += jumpV * dt
-                    if (cam.position.y <= 1.7f) {
-                        cam.position.y = 1.7f
+                    if (cam.position.y <= ge) {
+                        cam.position.y = ge
                         jumpV = 0f
                     }
+                } else {
+                    cam.position.y += (ge - cam.position.y) * minOf(1f, dt * 18f)
                 }
-                cam.position.x = cam.position.x.coerceIn(-495f, 495f)
+                cam.position.x = cam.position.x.coerceIn(-955f, 955f)
                 cam.position.z = cam.position.z.coerceIn(-495f, 495f)
                 collide(cam.position, 0.6f)
             }
             if (planeActive) {
-                planeX += planeDX * 45f * dt
-                planeZ += planeDZ * 45f * dt
-                if (dropState > 0 && (abs(planeX) > 700f || abs(planeZ) > 700f)) planeActive = false
+                planeX += planeDX * 60f * dt
+                planeZ += planeDZ * 60f * dt
+                if (dropState > 0 && (abs(planeX) > 1500f || abs(planeZ) > 1500f)) planeActive = false
             }
 
             updateZone(dt * timeScale)
@@ -1296,7 +1342,7 @@ class BattleGame : ApplicationAdapter() {
                 } else if (inCircle(tx, ty, jumpX, jumpY, jumpR * 1.15f)) {
                     if (dropState == 0) startFreefall()
                     else if (dropState == 1) openChute()
-                    else if (dropState == 3 && cam.position.y <= 1.72f) jumpV = 6.5f
+                    else if (dropState == 3 && cam.position.y <= world.h(cam.position.x, cam.position.z) + 1.9f && jumpV == 0f) jumpV = 6.5f
                 } else if (slotHit(tx, ty) >= 0) {
                     selectSlot(slotHit(tx, ty))
                 } else if (inCircle(tx, ty, camX, camY, camR * 1.15f)) {
@@ -1349,9 +1395,9 @@ class BattleGame : ApplicationAdapter() {
                 var bestDist = maxD
                 var bestHead = false
                 for (b in bots) {
-                    val hc = Vector3(b.pos.x, 1.68f, b.pos.z)
-                    val tc = Vector3(b.pos.x, 1.25f, b.pos.z)
-                    val lc = Vector3(b.pos.x, 0.65f, b.pos.z)
+                    val hc = Vector3(b.pos.x, b.pos.y + 1.68f, b.pos.z)
+                    val tc = Vector3(b.pos.x, b.pos.y + 1.25f, b.pos.z)
+                    val lc = Vector3(b.pos.x, b.pos.y + 0.65f, b.pos.z)
                     var hit = false
                     var head = false
                     var d = 0f
@@ -1414,7 +1460,7 @@ class BattleGame : ApplicationAdapter() {
                 val toPx = cam.position.x - b.pos.x
                 val toPz = cam.position.z - b.pos.z
                 val toP = sqrt(toPx * toPx + toPz * toPz)
-                val los = toP < 30f && dropState == 3 && hasLos(Vector3(b.pos.x, 1.5f, b.pos.z), eye)
+                val los = toP < 30f && dropState == 3 && hasLos(Vector3(b.pos.x, b.pos.y + 1.5f, b.pos.z), eye)
                 var speed = 2.5f
                 var move = true
                 var facePlayer = false
@@ -1441,7 +1487,7 @@ class BattleGame : ApplicationAdapter() {
                             val ox = o.pos.x - b.pos.x
                             val oz = o.pos.z - b.pos.z
                             val od = sqrt(ox * ox + oz * oz)
-                            if (od < rd && hasLos(Vector3(b.pos.x, 1.5f, b.pos.z), Vector3(o.pos.x, 1.5f, o.pos.z))) {
+                            if (od < rd && hasLos(Vector3(b.pos.x, b.pos.y + 1.5f, b.pos.z), Vector3(o.pos.x, o.pos.y + 1.5f, o.pos.z))) {
                                 rd = od
                                 rv = o
                             }
@@ -1465,10 +1511,14 @@ class BattleGame : ApplicationAdapter() {
                         val tdx = b.target.x - b.pos.x
                         val tdz = b.target.z - b.pos.z
                         if (b.retarget <= 0f || tdx * tdx + tdz * tdz < 9f) {
-                            val a = rnd.nextFloat() * 6.2831853f
-                            val d = sqrt(rnd.nextFloat()) * zoneR * 0.8f
-                            b.target.set((zoneCx + cos(a) * d).coerceIn(-480f, 480f), 0f,
-                                         (zoneCz + sin(a) * d).coerceIn(-480f, 480f))
+                            var tt = 0
+                            do {
+                                val a = rnd.nextFloat() * 6.2831853f
+                                val d = sqrt(rnd.nextFloat()) * zoneR * 0.8f
+                                b.target.set((zoneCx + cos(a) * d).coerceIn(-940f, 940f), 0f,
+                                             (zoneCz + sin(a) * d).coerceIn(-480f, 480f))
+                                tt++
+                            } while (tt < 12 && (!world.walkable(b.target.x, b.target.z) || world.h(b.target.x, b.target.z) < 1f))
                             b.retarget = 6f + rnd.nextFloat() * 6f
                         }
                     }
@@ -1481,15 +1531,21 @@ class BattleGame : ApplicationAdapter() {
                         dir.nor()
                         faceYaw = atan2(dir.x, dir.z) * 57.29578f
                         dir.scl(speed * dt)
-                        b.pos.add(dir)
+                        val bx0 = b.pos.x
+                        val bz0 = b.pos.z
+                        moveOnLand(b.pos, dir.x, dir.z)
+                        val mdx = b.pos.x - bx0
+                        val mdz = b.pos.z - bz0
+                        if (mdx * mdx + mdz * mdz < 0.25f * dir.x * dir.x + 0.25f * dir.z * dir.z) b.retarget = 0f
                         moved = true
                     }
                 }
                 if (facePlayer && (los || !moved)) faceYaw = atan2(toPx, toPz) * 57.29578f
                 b.yaw = turnTo(b.yaw, faceYaw, 480f * dt)
-                b.pos.x = b.pos.x.coerceIn(-495f, 495f)
+                b.pos.x = b.pos.x.coerceIn(-955f, 955f)
                 b.pos.z = b.pos.z.coerceIn(-495f, 495f)
                 collide(b.pos, 0.8f)
+                b.pos.y = world.h(b.pos.x, b.pos.z)
 
                 b.shooting = los || rivalFire
                 b.moving = moved
@@ -1543,6 +1599,7 @@ class BattleGame : ApplicationAdapter() {
             cam.update()
         }
         batch.begin(cam)
+        world.render(batch, cam, env)
         batch.render(buildings, env)
         if (planeActive) {
             val pm = Matrix4().translate(planeX, planeY, planeZ).rotate(Vector3.Y, planeYaw)
@@ -1564,7 +1621,7 @@ class BattleGame : ApplicationAdapter() {
             val tgt = if (armedNow || dropState in 1..2) yaw + 180f else if (moving) pMoveYaw else pYaw
             pYaw = turnTo(pYaw, tgt, 720f * dt)
             if (hp <= 0f) play(pa, "Death", 1f, 1, 0.1f)
-            else if (dropState in 1..2 || eyeP.y > 1.78f) play(pa, "Jump", 1f)
+            else if (dropState in 1..2 || eyeP.y > world.h(eyeP.x, eyeP.z) + 2.3f) play(pa, "Jump", 1f)
             else locoAnim(pa, if (moving) pSpeed else 0f, armedNow)
             pa.ctrl.update(dt)
             drawActor(pa, eyeP.x, eyeP.y - 1.7f, eyeP.z, pYaw, slots[cur].type, slots[1 - cur].type, armedNow && hp > 0f, flash > 0f)
@@ -1573,17 +1630,17 @@ class BattleGame : ApplicationAdapter() {
             val bdx = b.pos.x - cam.position.x
             val bdz = b.pos.z - cam.position.z
             if (bdx * bdx + bdz * bdz > 250f * 250f) continue
-            if (!cam.frustum.sphereInFrustum(b.pos.x, 1f, b.pos.z, 1.8f)) continue
+            if (!cam.frustum.sphereInFrustum(b.pos.x, b.pos.y + 1f, b.pos.z, 1.8f)) continue
             val ba = b.actor
             if (ba == null) {
-                boxInst.transform.setToTranslation(b.pos.x, 1f, b.pos.z)
+                boxInst.transform.setToTranslation(b.pos.x, b.pos.y + 1f, b.pos.z)
                 batch.render(boxInst, env)
                 continue
             }
             val armed = b.armedT > 0f
             locoAnim(ba, b.vel, armed)
             ba.ctrl.update(dt)
-            drawActor(ba, b.pos.x, 0f, b.pos.z, b.yaw, b.weapon, b.back, armed,
+            drawActor(ba, b.pos.x, b.pos.y, b.pos.z, b.yaw, b.weapon, b.back, armed,
                       b.shooting && ((gameTime * 18f).toInt() + b.outfit) % 2 == 0)
         }
         val ci = corpses.iterator()
@@ -1597,7 +1654,7 @@ class BattleGame : ApplicationAdapter() {
             val ca = c.actor
             if (ca != null) {
                 if (c.deadT < 2.6f) ca.ctrl.update(dt)
-                drawActor(ca, c.pos.x, 0f, c.pos.z, c.yaw, -1, -1, false, false)
+                drawActor(ca, c.pos.x, c.pos.y, c.pos.z, c.yaw, -1, -1, false, false)
             }
         }
         for (l in loot) {
@@ -1605,10 +1662,11 @@ class BattleGame : ApplicationAdapter() {
             val dz = l.z - cam.position.z
             if (dx * dx + dz * dz > 120f * 120f) continue
             val bi = beams[l.kind]
-            bi.transform.setToTranslation(l.x, 4.5f, l.z)
+            val lgh = world.h(l.x, l.z)
+            bi.transform.setToTranslation(l.x, lgh + 4.5f, l.z)
             batch.render(bi, env)
             val lb = Matrix4()
-            lb.translate(l.x, 0.95f + 0.12f * sin(gameTime * 2f + l.x), l.z)
+            lb.translate(l.x, lgh + 0.95f + 0.12f * sin(gameTime * 2f + l.x), l.z)
             lb.rotate(Vector3.Y, gameTime * 80f)
             if (l.kind <= 3) {
                 lb.scale(1.5f, 1.5f, 1.5f)
@@ -1659,8 +1717,8 @@ class BattleGame : ApplicationAdapter() {
 
         val nl = nearLoot
         val ms = 0.2f
-        val mcx = 190f
-        val mcy = h - 180f
+        val mcx = 207f
+        val mcy = h - 115f
 
         shapes.begin(ShapeRenderer.ShapeType.Filled)
         if (outside) {
@@ -1766,9 +1824,14 @@ class BattleGame : ApplicationAdapter() {
         }
 
         // minimap (top-left)
-        shapes.setColor(0f, 0.15f, 0f, 0.55f)
-        shapes.rect(mcx - 150f, mcy - 150f, 300f, 300f)
+        shapes.setColor(0f, 0f, 0f, 0.6f)
+        shapes.rect(mcx - 195f, mcy - 103f, 390f, 206f)
         shapes.end()
+        sb.begin()
+        sb.setColor(1f, 1f, 1f, 0.95f)
+        sb.draw(world.colorTex, mcx - 192f, mcy - 100f, 384f, 200f)
+        sb.setColor(1f, 1f, 1f, 1f)
+        sb.end()
 
         Gdx.gl.glLineWidth(3f)
         shapes.begin(ShapeRenderer.ShapeType.Line)
@@ -1817,7 +1880,9 @@ class BattleGame : ApplicationAdapter() {
         font.data.setScale(2f)
         centered("ALIVE ${bots.size + (if (hp > 0f) 1 else 0)}    KILLS $kills    ${fmt(1200f - matchTime)}", h - 95f, w * 0.76f)
         font.data.setScale(1.4f)
-        font.draw(sb, "FPS ${Gdx.graphics.framesPerSecond}", 40f, h - 20f)
+        font.draw(sb, "FPS ${Gdx.graphics.framesPerSecond}", 410f, h - 20f)
+        font.data.setScale(1.5f)
+        font.draw(sb, world.placeName(cam.position.x, cam.position.z), 20f, h - 228f)
         font.draw(sb, "HP ${hp.coerceAtLeast(0f).toInt()}/100", w / 2f - 60f, 38f)
 
         // weapon panel texts
@@ -1843,7 +1908,7 @@ class BattleGame : ApplicationAdapter() {
         }
         label("x$medkits", medX + 38f, h - medY + 40f)
 
-        if (dropState < 3) centered("ALTITUDE ${(if (dropState == 0) planeY else cam.position.y).toInt()} m", h * 0.28f, w)
+        if (dropState < 3) centered("ALTITUDE ${(if (dropState == 0) planeY else cam.position.y - world.h(cam.position.x, cam.position.z)).toInt()} m", h * 0.28f, w)
         if (dropState == 0) centered("Still in cabin: ${bots.size + 1}", h * 0.22f, w)
         if (msgT > 0f) centered(msg, h * 0.64f, w)
         if (nl != null) centered("Weapon: " + weapons[nl.kind].name + " - tap PICK", h * 0.34f, w)
@@ -1872,6 +1937,7 @@ class BattleGame : ApplicationAdapter() {
         sb.dispose()
         font.dispose()
         models.forEach { it.dispose() }
+        world.dispose()
         texCache.values.forEach { it.dispose() }
     }
 }
