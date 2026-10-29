@@ -712,22 +712,22 @@ class TerrainWorld {
         fun ibld(x: Float, z: Float): VegBuilder {
             val i = ((x - X0) / VEG).toInt().coerceIn(0, vx - 1)
             val j = ((z - Z0) / VEG).toInt().coerceIn(0, vz - 1)
-            var b = ibuilders[j * vx + i]
-            if (b == null) {
-                b = VegBuilder()
-                ibuilders[j * vx + i] = b
-            }
-            return b
+            val k = j * vx + i
+            val ex = ibuilders[k]
+            if (ex != null) return ex
+            val nb = VegBuilder()
+            ibuilders[k] = nb
+            return nb
         }
         fun bld(x: Float, z: Float): VegBuilder {
             val i = ((x - X0) / VEG).toInt().coerceIn(0, vx - 1)
             val j = ((z - Z0) / VEG).toInt().coerceIn(0, vz - 1)
-            var b = builders[j * vx + i]
-            if (b == null) {
-                b = VegBuilder()
-                builders[j * vx + i] = b
-            }
-            return b
+            val k = j * vx + i
+            val ex = builders[k]
+            if (ex != null) return ex
+            val nb = VegBuilder()
+            builders[k] = nb
+            return nb
         }
         val rnd = Random(4242)
         val inp = DataInputStream(BufferedInputStream(Gdx.files.internal("map_obj.bin").read(), 1 shl 16))
