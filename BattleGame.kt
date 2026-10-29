@@ -194,6 +194,8 @@ class BattleGame : ApplicationAdapter() {
     private var pAnim = 0f
     private var medkits = 0
     private var sprint = false
+    private var stance = 0          // 0 standing, 1 sitting/crouched, 2 prone
+    private var eyeH = 1.7f
     private var jumpV = 0f
     private var pSpeed = 7f
     private var pYaw = 180f
@@ -723,6 +725,8 @@ class BattleGame : ApplicationAdapter() {
         cam.position.z = cam.position.z.coerceIn(-world.maxZ, world.maxZ)
         if (cam.position.y <= world.h(cam.position.x, cam.position.z) + 1.7f) {
             snapToLand(cam.position)
+            stance = 0
+            eyeH = 1.7f
             cam.position.y = world.h(cam.position.x, cam.position.z) + 1.7f
             dropState = 3
             dropVy = 0f
@@ -957,6 +961,8 @@ class BattleGame : ApplicationAdapter() {
         reserve = 36
         medkits = 0
         sprint = false
+        stance = 0
+        eyeH = 1.7f
         jumpV = 0f
         slots[0].type = 0
         slots[0].mag = weapons[0].mag
@@ -1286,6 +1292,12 @@ class BattleGame : ApplicationAdapter() {
         val jumpX = w * 0.93f
         val jumpY = h * 0.91f
         val jumpR = h * 0.065f
+        val crouchX = w * 0.835f
+        val crouchY = h * 0.935f
+        val crouchR = h * 0.058f
+        val proneX = w * 0.665f
+        val proneY = h * 0.915f
+        val proneR = h * 0.058f
 
         var mx = 0f
         var my = 0f
@@ -1314,6 +1326,7 @@ class BattleGame : ApplicationAdapter() {
                     inCircle(x, y, medX, medY, medR * 1.15f) ||
                     inCircle(x, y, runX, runY, runR * 1.15f) ||
                     inCircle(x, y, jumpX, jumpY, jumpR * 1.15f) ||
+                    inCircle(x, y, crouchX, crouchY, crouchR * 1.15f) || inCircle(x, y, proneX, proneY, proneR * 1.15f) ||
                     inCircle(x, y, camX, camY, camR * 1.15f) ||
                     inCircle(x, y, mapX, mapY, mapR) ||
                     inCircle(x, y, zbX, zbY1, zbR * 1.2f) || inCircle(x, y, zbX, zbY2, zbR * 1.2f) ||
@@ -1333,7 +1346,7 @@ class BattleGame : ApplicationAdapter() {
 
             val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, yaw)
             val right = Vector3(fwd).crs(Vector3.Y)
-            val speed = if (sprint) 8.5f else 5.5f
+            val speed = (if (sprint && stance == 0) 8.5f else 5.5f) * (if (stance == 1) 0.55f else if (stance == 2) 0.28f else 1f)
             pSpeed = speed * minOf(1f, sqrt(mx * mx + my * my))
             pMoving = (mx * mx + my * my) > 0.04f
             if (pMoving) {
@@ -1345,7 +1358,9 @@ class BattleGame : ApplicationAdapter() {
             } else {
                 val stepV = Vector3(fwd).scl(my * speed * dt).add(Vector3(right).scl(mx * speed * dt))
                 moveOnLand(cam.position, stepV.x, stepV.z)
-                val ge = world.groundY(cam.position.x, cam.position.z, cam.position.y - 1.7f) + 1.7f
+                val eyeT = if (stance == 1) 1.15f else if (stance == 2) 0.55f else 1.7f
+                eyeH += (eyeT - eyeH) * minOf(1f, dt * 10f)
+                val ge = world.groundY(cam.position.x, cam.position.z, cam.position.y - eyeH) + eyeH
                 if (jumpV != 0f || cam.position.y > ge + 0.6f) {
                     jumpV -= 18f * dt
                     cam.position.y += jumpV * dt
@@ -1358,7 +1373,7 @@ class BattleGame : ApplicationAdapter() {
                 }
                 cam.position.x = cam.position.x.coerceIn(-world.maxX, world.maxX)
                 cam.position.z = cam.position.z.coerceIn(-world.maxZ, world.maxZ)
-                collide(cam.position, 0.6f)
+                collide(cam.position, 0.6f, cam.position.y - eyeH)
             }
             if (planeActive) {
                 planeX += planeDX * 75f * dt
@@ -1385,8 +1400,8 @@ class BattleGame : ApplicationAdapter() {
                 val ldz = l.z - cam.position.z
                 val ld = sqrt(ldx * ldx + ldz * ldz)
                 if (l.kind >= 4) {
-                    if (dropState == 3 && ld < 2.2f && abs(l.y - (cam.position.y - 1.7f)) < 2.2f && applyItem(l)) loot.removeAt(li)
-                } else if (dropState == 3 && ld < nearD && abs(l.y - (cam.position.y - 1.7f)) < 2.2f) {
+                    if (dropState == 3 && ld < 2.2f && abs(l.y - (cam.position.y - eyeH)) < 2.2f && applyItem(l)) loot.removeAt(li)
+                } else if (dropState == 3 && ld < nearD && abs(l.y - (cam.position.y - eyeH)) < 2.2f) {
                     near = l
                     nearD = ld
                 }
@@ -1424,7 +1439,12 @@ class BattleGame : ApplicationAdapter() {
                 } else if (inCircle(tx, ty, jumpX, jumpY, jumpR * 1.15f)) {
                     if (dropState == 0) startFreefall()
                     else if (dropState == 1) openChute()
-                    else if (dropState == 3 && cam.position.y <= world.h(cam.position.x, cam.position.z) + 1.9f && jumpV == 0f) jumpV = 6.5f
+                    else if (dropState == 3 && stance != 0) stance = 0
+                    else if (dropState == 3 && cam.position.y - eyeH <= world.groundY(cam.position.x, cam.position.z, cam.position.y - eyeH) + 0.25f && jumpV == 0f) jumpV = 6.5f
+                } else if (inCircle(tx, ty, crouchX, crouchY, crouchR * 1.15f)) {
+                    if (dropState == 3 && hp > 0f) stance = if (stance == 1) 0 else 1
+                } else if (inCircle(tx, ty, proneX, proneY, proneR * 1.15f)) {
+                    if (dropState == 3 && hp > 0f) stance = if (stance == 2) 0 else 2
                 } else if (slotHit(tx, ty) >= 0) {
                     selectSlot(slotHit(tx, ty))
                 } else if (inCircle(tx, ty, camX, camY, camR * 1.15f)) {
@@ -1703,10 +1723,12 @@ class BattleGame : ApplicationAdapter() {
             val tgt = if (armedNow || dropState in 1..2) yaw + 180f else if (moving) pMoveYaw else pYaw
             pYaw = turnTo(pYaw, tgt, 720f * dt)
             if (hp <= 0f) play(pa, "Death", 1f, 1, 0.1f)
-            else if (dropState in 1..2 || eyeP.y > world.h(eyeP.x, eyeP.z) + 2.3f) play(pa, "Jump", 1f)
+            else if (dropState in 1..2 || (dropState == 3 && (jumpV != 0f || eyeP.y - eyeH > world.groundY(eyeP.x, eyeP.z, eyeP.y - eyeH) + 0.6f))) play(pa, "Jump", 1f)
+            else if (dropState == 3 && stance == 2) play(pa, if (moving) "Crawl" else "Prone", if (moving) (pSpeed / 1.5f).coerceIn(0.6f, 1.5f) else 1f)
+            else if (dropState == 3 && stance == 1) play(pa, if (moving) "CrouchWalk" else "Crouch", if (moving) (pSpeed / 2f).coerceIn(0.6f, 1.5f) else 1f)
             else locoAnim(pa, if (moving) pSpeed else 0f, armedNow)
             pa.ctrl.update(dt)
-            drawActor(pa, eyeP.x, eyeP.y - 1.7f, eyeP.z, pYaw, slots[cur].type, slots[1 - cur].type, armedNow && hp > 0f, flash > 0f)
+            drawActor(pa, eyeP.x, eyeP.y - (if (dropState == 3) eyeH else 1.7f), eyeP.z, pYaw, slots[cur].type, slots[1 - cur].type, armedNow && hp > 0f, flash > 0f)
         }
         for (b in bots) {
             val bdx = b.pos.x - cam.position.x
@@ -1830,6 +1852,11 @@ class BattleGame : ApplicationAdapter() {
         shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
         shapes.circle(camX, h - camY, camR)
         shapes.circle(jumpX, h - jumpY, jumpR)
+        if (stance == 1) shapes.setColor(1f, 0.6f, 0.1f, 0.75f) else shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
+        shapes.circle(crouchX, h - crouchY, crouchR)
+        if (stance == 2) shapes.setColor(1f, 0.6f, 0.1f, 0.75f) else shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
+        shapes.circle(proneX, h - proneY, proneR)
+        shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
         if (sprint) shapes.setColor(1f, 0.6f, 0.1f, 0.75f) else shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
         shapes.circle(runX, h - runY, runR)
         shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
@@ -2073,6 +2100,8 @@ class BattleGame : ApplicationAdapter() {
         label("RELOAD", reloadX, h - reloadY)
         label(if (tpp) "1ST" else "3RD", camX, h - camY)
         label("RUN", runX, h - runY)
+        label("SIT", crouchX, h - crouchY)
+        label("PRONE", proneX, h - proneY)
         label(if (dropState == 0) "EJECT" else if (dropState == 1) "CHUTE" else "JUMP", jumpX, h - jumpY)
         if (nl != null) label("PICK", pickX, h - pickY)
         font.data.setScale(3f)
