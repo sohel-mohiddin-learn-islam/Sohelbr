@@ -6,7 +6,9 @@ import com.badlogic.gdx.InputAdapter
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.GL20
 import com.badlogic.gdx.graphics.PerspectiveCamera
+import com.badlogic.gdx.graphics.Mesh
 import com.badlogic.gdx.graphics.Texture
+import com.badlogic.gdx.graphics.VertexAttribute
 import com.badlogic.gdx.graphics.VertexAttributes.Usage
 import com.badlogic.gdx.graphics.g2d.BitmapFont
 import com.badlogic.gdx.graphics.g2d.GlyphLayout
@@ -22,7 +24,9 @@ import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute
 import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight
 import com.badlogic.gdx.graphics.g3d.loader.G3dModelLoader
+import com.badlogic.gdx.graphics.g3d.model.MeshPart
 import com.badlogic.gdx.graphics.g3d.model.Node
+import com.badlogic.gdx.graphics.g3d.model.NodePart
 import com.badlogic.gdx.graphics.g3d.shaders.DefaultShader
 import com.badlogic.gdx.graphics.g3d.utils.AnimationController
 import com.badlogic.gdx.graphics.g3d.utils.DefaultShaderProvider
@@ -35,6 +39,8 @@ import com.badlogic.gdx.math.Vector3
 import com.badlogic.gdx.math.collision.BoundingBox
 import com.badlogic.gdx.math.collision.Ray
 import com.badlogic.gdx.utils.JsonReader
+import java.io.BufferedInputStream
+import java.io.DataInputStream
 import java.util.Random
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -169,7 +175,7 @@ class BattleGame : ApplicationAdapter() {
 
     // human characters: [gender][outfit][frame]  frames 0..3 = run cycle, 4 = aiming
     private var loadIdx = 0
-    private val loadTotal = 4
+    private val loadTotal = 5
     private var humanLoader: G3dModelLoader? = null
     private var humanProvider: TextureProvider? = null
     private var humansOk = false
@@ -194,6 +200,15 @@ class BattleGame : ApplicationAdapter() {
     private var pAnim = 0f
     private var medkits = 0
     private var sprint = false
+    private var carInst: ModelInstance? = null
+    private var bikeInst: ModelInstance? = null
+    private var paraInst: ModelInstance? = null
+    private val vehicles = ArrayList<Vehicle>()
+    private var driving: Vehicle? = null
+    private var nearVeh: Vehicle? = null
+    private var tppBeforeDrive = true
+    private var lookT = 0f
+    private var chuteT = 0f
     private var stance = 0          // 0 standing, 1 sitting/crouched, 2 prone
     private var eyeH = 1.7f
     private var jumpV = 0f
@@ -202,12 +217,19 @@ class BattleGame : ApplicationAdapter() {
     private var pMoving = false
     private var pMoveYaw = 0f
 
+    private fun tpOffset(): Vector3 {
+        val back = Vector3(cam.direction).scl(-1f)
+        val rgt = Vector3(cam.direction).crs(Vector3.Y).nor()
+        val dv = driving
+        return if (dv == null) Vector3(back).scl(3.1f).add(rgt.scl(0.55f)).add(0f, 0.45f, 0f)
+        else if (dv.type == 0) Vector3(back).scl(6.8f).add(0f, 1.6f, 0f)
+        else Vector3(back).scl(4.2f).add(0f, 1.0f, 0f)
+    }
+
     // Free Fire style camera: orbits a pivot at the player's shoulders, a bit to the right, pulled in by walls
     private fun tpWanted(eye: Vector3): Float {
         val pv = Vector3(eye).add(0f, -0.15f, 0f)
-        val back = Vector3(cam.direction).scl(-1f)
-        val rgt = Vector3(cam.direction).crs(Vector3.Y).nor()
-        val off = Vector3(back).scl(3.1f).add(rgt.scl(0.55f)).add(0f, 0.45f, 0f)
+        val off = tpOffset()
         val len = off.len()
         val wd = wallDist(Ray(pv, Vector3(off).nor()), len)
         return minOf(len, wd - 0.4f).coerceAtLeast(0.5f)
@@ -215,9 +237,7 @@ class BattleGame : ApplicationAdapter() {
 
     private fun tpCamPos(eye: Vector3): Vector3 {
         val pv = Vector3(eye).add(0f, -0.15f, 0f)
-        val back = Vector3(cam.direction).scl(-1f)
-        val rgt = Vector3(cam.direction).crs(Vector3.Y).nor()
-        val off = Vector3(back).scl(3.1f).add(rgt.scl(0.55f)).add(0f, 0.45f, 0f)
+        val off = tpOffset()
         val full = off.len()
         val p = pv.add(off.nor().scl(minOf(tpLen, full)))
         val gmin = world.groundY(p.x, p.z, pv.y - 1.0f) + 0.5f
@@ -366,6 +386,7 @@ class BattleGame : ApplicationAdapter() {
                         Gdx.app.error("BattleGame", "plane model missing, using simple plane", e)
                     }
                 }
+                4 -> loadVehicles()
             }
             loadIdx++
         } catch (e: Throwable) {
@@ -373,6 +394,12 @@ class BattleGame : ApplicationAdapter() {
             humansOk = false
             loadIdx = loadTotal
         }
+    }
+
+    private fun loadVehicles() {
+        try { carInst = ModelInstance(loadVMesh("car.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "car missing", e) }
+        try { bikeInst = ModelInstance(loadVMesh("bike.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "bike missing", e) }
+        try { paraInst = ModelInstance(loadVMesh("para.vmesh", getTex("para.jpg")).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "parachute missing", e) }
     }
 
     private fun makeActor(g: Int, o: Int): Actor? {
@@ -701,6 +728,7 @@ class BattleGame : ApplicationAdapter() {
     private fun openChute() {
         if (dropState != 1) return
         dropState = 2
+        chuteT = 0f
         msg = "Parachute open - steer to your landing spot"
         msgT = 3f
     }
@@ -924,6 +952,132 @@ class BattleGame : ApplicationAdapter() {
         hp -= d - a
     }
 
+    // ------------------------------------------------------------------
+    // vehicles: Porsche (type 0) and retro bike (type 1)
+    // ------------------------------------------------------------------
+    private fun vehHalf(vh: Vehicle): Float = if (vh.type == 0) 1.9f else 0.8f
+
+    private fun placeVehicle(vh: Vehicle, snap: Boolean, dt: Float) {
+        val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, vh.yaw)
+        val l = vehHalf(vh)
+        val hf = world.h(vh.x + fwd.x * l, vh.z + fwd.z * l)
+        val hb = world.h(vh.x - fwd.x * l, vh.z - fwd.z * l)
+        val ty = (hf + hb) / 2f
+        val tp = atan2(hf - hb, 2f * l) * 57.29578f
+        if (snap) {
+            vh.y = ty
+            vh.pitch = tp
+        } else {
+            val k = minOf(1f, dt * 10f)
+            vh.y += (ty - vh.y) * k
+            vh.pitch += (tp - vh.pitch) * k
+        }
+    }
+
+    private fun spawnVehicles() {
+        vehicles.clear()
+        driving = null
+        nearVeh = null
+        val ts = world.towns
+        if (ts.isEmpty()) return
+        for (i in 0 until 44) {
+            val t = ts[rnd.nextInt(ts.size)]
+            var tries = 0
+            while (tries < 40) {
+                tries++
+                val a = rnd.nextFloat() * 6.2831855f
+                val r = 10f + rnd.nextFloat() * (t.r * 0.9f + 20f)
+                val x = t.x + cos(a) * r
+                val z = t.z + sin(a) * r
+                if (!world.walkable(x, z) || world.h(x, z) < 1.2f) continue
+                val p = Vector3(x, world.h(x, z) + 1f, z)
+                collide(p, 2.4f, world.h(x, z))
+                if (abs(p.x - x) + abs(p.z - z) > 0.05f) continue
+                if (abs(world.h(x + 3f, z) - world.h(x - 3f, z)) > 1.0f || abs(world.h(x, z + 3f) - world.h(x, z - 3f)) > 1.0f) continue
+                val vh = Vehicle(if (i % 2 == 0) 0 else 1, x, z, rnd.nextFloat() * 360f)
+                placeVehicle(vh, true, 0f)
+                vehicles.add(vh)
+                break
+            }
+        }
+    }
+
+    private fun enterVehicle(vh: Vehicle) {
+        driving = vh
+        tppBeforeDrive = tpp
+        tpp = true
+        stance = 0
+        sprint = false
+        jumpV = 0f
+        vh.v = 0f
+        eyeH = if (vh.type == 0) 1.2f else 1.55f
+        yaw = vh.yaw
+        msg = if (vh.type == 0) "Driving the Porsche - left stick: gas and steer" else "Riding the bike - left stick: pedal and steer"
+        msgT = 3f
+    }
+
+    private fun exitVehicle() {
+        val vh = driving ?: return
+        driving = null
+        vh.v = 0f
+        val right = Vector3(0f, 0f, -1f).rotate(Vector3.Y, vh.yaw).crs(Vector3.Y).nor()
+        val d = if (vh.type == 0) 2.4f else 1.3f
+        var px = vh.x + right.x * d
+        var pz = vh.z + right.z * d
+        if (!world.walkable(px, pz)) {
+            px = vh.x - right.x * d
+            pz = vh.z - right.z * d
+        }
+        val p = Vector3(px, world.h(px, pz) + 1.7f, pz)
+        collide(p, 0.6f, world.h(px, pz))
+        cam.position.set(p.x, world.groundY(p.x, p.z, p.y - 1.7f) + 1.7f, p.z)
+        eyeH = 1.7f
+        tpp = tppBeforeDrive
+    }
+
+    private fun updateDriving(vh: Vehicle, dt: Float, mx: Float, my: Float) {
+        val car = vh.type == 0
+        val maxF = if (car) 26f else 9f
+        val maxR = if (car) -7f else -2.5f
+        val acc = if (car) 11f else 5f
+        if (my > 0.05f) vh.v += acc * my * dt * (if (vh.v < 0f) 2.5f else 1f)
+        else if (my < -0.05f) vh.v += acc * my * dt * (if (vh.v > 0f) 1.8f else 0.8f)
+        else {
+            val c = (if (car) 4f else 3f) * dt
+            vh.v = if (abs(vh.v) <= c) 0f else vh.v - (if (vh.v > 0f) c else -c)
+        }
+        vh.v = vh.v.coerceIn(maxR, maxF)
+        val sp = abs(vh.v)
+        val steer = (if (car) 80f else 105f) * minOf(1f, sp / 4f) * (if (vh.v >= 0f) 1f else -1f)
+        vh.yaw -= mx * steer * dt
+        val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, vh.yaw)
+        val nx = vh.x + fwd.x * vh.v * dt
+        val nz = vh.z + fwd.z * vh.v * dt
+        if (stepOk(vh.x, vh.z, nx, nz)) {
+            vh.x = nx
+            vh.z = nz
+        } else vh.v = 0f
+        vh.x = vh.x.coerceIn(-world.maxX, world.maxX)
+        vh.z = vh.z.coerceIn(-world.maxZ, world.maxZ)
+        val p = Vector3(vh.x, vh.y + 1f, vh.z)
+        collide(p, if (car) 1.5f else 0.7f, vh.y)
+        val moved = abs(p.x - vh.x) + abs(p.z - vh.z)
+        if (moved > 0.02f) {
+            vh.v *= 0.45f
+            vh.x = p.x
+            vh.z = p.z
+        }
+        placeVehicle(vh, false, dt)
+        cam.position.set(vh.x, vh.y + eyeH, vh.z)
+        // camera swings behind the vehicle unless the player is looking around
+        if (lookT <= 0f) {
+            val dd = (((vh.yaw - yaw) % 360f) + 540f) % 360f - 180f
+            yaw += dd * minOf(1f, dt * 2.2f)
+        }
+        pSpeed = sp
+        pMoving = sp > 0.5f
+    }
+
     private fun inCircle(x: Float, y: Float, cx: Float, cy: Float, r: Float): Boolean {
         val dx = x - cx
         val dy = y - cy
@@ -1002,6 +1156,7 @@ class BattleGame : ApplicationAdapter() {
         spawnBots(botCount)
         loot.clear()
         spawnLoot(760)
+        spawnVehicles()
     }
 
     // push a position out of any building (circle vs box, top-down)
@@ -1298,6 +1453,9 @@ class BattleGame : ApplicationAdapter() {
         val proneX = w * 0.665f
         val proneY = h * 0.915f
         val proneR = h * 0.058f
+        val driveX = w * 0.60f
+        val driveY = h * 0.66f
+        val driveR = h * 0.075f
 
         var mx = 0f
         var my = 0f
@@ -1331,6 +1489,7 @@ class BattleGame : ApplicationAdapter() {
                     inCircle(x, y, mapX, mapY, mapR) ||
                     inCircle(x, y, zbX, zbY1, zbR * 1.2f) || inCircle(x, y, zbX, zbY2, zbR * 1.2f) ||
                     slotHit(x, y) >= 0 ||
+                    ((nearVeh != null || driving != null) && inCircle(x, y, driveX, driveY, driveR * 1.15f)) ||
                     (nearLoot != null && inCircle(x, y, pickX, pickY, pickR * 1.15f))) {
                     // finger is on a button, not on movement or look
                 } else if (x < w / 2f) {
@@ -1340,10 +1499,13 @@ class BattleGame : ApplicationAdapter() {
                     knobY = joyY - my * joyR
                 } else {
                     yaw -= Gdx.input.getDeltaX(i) * 0.2f
+                    lookT = 1.6f
                     pitch = (pitch - Gdx.input.getDeltaY(i) * 0.2f).coerceIn(if (tpp) -55f else -80f, if (tpp) 35f else 80f)
                 }
             }
 
+            if (driving != null) firing = false
+            lookT -= dt
             val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, yaw)
             val right = Vector3(fwd).crs(Vector3.Y)
             val speed = (if (sprint && stance == 0) 8.5f else 5.5f) * (if (stance == 1) 0.55f else if (stance == 2) 0.28f else 1f)
@@ -1356,6 +1518,8 @@ class BattleGame : ApplicationAdapter() {
             if (dropState < 3) {
                 updateDrop(dt, mx, my, fwd, right)
             } else {
+                val dvh = driving
+                if (dvh != null) updateDriving(dvh, dt, mx, my) else {
                 val stepV = Vector3(fwd).scl(my * speed * dt).add(Vector3(right).scl(mx * speed * dt))
                 moveOnLand(cam.position, stepV.x, stepV.z)
                 val eyeT = if (stance == 1) 1.15f else if (stance == 2) 0.55f else 1.7f
@@ -1374,6 +1538,7 @@ class BattleGame : ApplicationAdapter() {
                 cam.position.x = cam.position.x.coerceIn(-world.maxX, world.maxX)
                 cam.position.z = cam.position.z.coerceIn(-world.maxZ, world.maxZ)
                 collide(cam.position, 0.6f, cam.position.y - eyeH)
+                }
             }
             if (planeActive) {
                 planeX += planeDX * 75f * dt
@@ -1408,6 +1573,20 @@ class BattleGame : ApplicationAdapter() {
                 li--
             }
             nearLoot = near
+            var nv: Vehicle? = null
+            if (driving == null && dropState == 3 && stance == 0 && hp > 0f) {
+                var nd = 4.2f
+                for (vh in vehicles) {
+                    val vdx = vh.x - cam.position.x
+                    val vdz = vh.z - cam.position.z
+                    val vd = sqrt(vdx * vdx + vdz * vdz)
+                    if (vd < nd) {
+                        nd = vd
+                        nv = vh
+                    }
+                }
+            }
+            nearVeh = nv
 
             // button taps
             for (t in taps) {
@@ -1425,6 +1604,9 @@ class BattleGame : ApplicationAdapter() {
                     mapCx = 0f
                     mapCz = 0f
                     pinchPrev = 0f
+                } else if ((nearVeh != null || driving != null) && inCircle(tx, ty, driveX, driveY, driveR * 1.15f)) {
+                    val nvv = nearVeh
+                    if (driving != null) exitVehicle() else if (nvv != null) enterVehicle(nvv)
                 } else if (inCircle(tx, ty, reloadX, reloadY, reloadR * 1.15f)) {
                     tryReload()
                 } else if (inCircle(tx, ty, medX, medY, medR * 1.15f)) {
@@ -1439,12 +1621,13 @@ class BattleGame : ApplicationAdapter() {
                 } else if (inCircle(tx, ty, jumpX, jumpY, jumpR * 1.15f)) {
                     if (dropState == 0) startFreefall()
                     else if (dropState == 1) openChute()
+                    else if (driving != null) { }
                     else if (dropState == 3 && stance != 0) stance = 0
                     else if (dropState == 3 && cam.position.y - eyeH <= world.groundY(cam.position.x, cam.position.z, cam.position.y - eyeH) + 0.25f && jumpV == 0f) jumpV = 6.5f
                 } else if (inCircle(tx, ty, crouchX, crouchY, crouchR * 1.15f)) {
-                    if (dropState == 3 && hp > 0f) stance = if (stance == 1) 0 else 1
+                    if (dropState == 3 && hp > 0f && driving == null) stance = if (stance == 1) 0 else 1
                 } else if (inCircle(tx, ty, proneX, proneY, proneR * 1.15f)) {
-                    if (dropState == 3 && hp > 0f) stance = if (stance == 2) 0 else 2
+                    if (dropState == 3 && hp > 0f && driving == null) stance = if (stance == 2) 0 else 2
                 } else if (slotHit(tx, ty) >= 0) {
                     selectSlot(slotHit(tx, ty))
                 } else if (inCircle(tx, ty, camX, camY, camR * 1.15f)) {
@@ -1683,7 +1866,7 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
         val eyeP = Vector3(cam.position)
         val pa = pActor
-        val showBody = tpp && humansOk && pa != null && dropState > 0
+        val showBody = tpp && humansOk && pa != null && dropState > 0 && driving == null
         if (dropState == 0) {
             // Free Fire style: camera floats behind and above the plane and can orbit around it
             cam.position.set(planeX, planeY + 1.5f, planeZ).add(Vector3(cam.direction).scl(-46f))
@@ -1712,8 +1895,38 @@ class BattleGame : ApplicationAdapter() {
             } else drawProp(planeProp, pm)
         }
         if (dropState == 2) {
-            canopy.transform.setToTranslation(eyeP.x, eyeP.y + 3.4f, eyeP.z)
-            batch.render(canopy, env)
+            val pc = paraInst
+            if (pc != null) {
+                chuteT += dt
+                val so = minOf(1f, chuteT / 0.9f)
+                val sx = 0.2f + 0.8f * so
+                val sy = 0.35f + 0.65f * so
+                pc.transform.setToTranslation(eyeP.x, eyeP.y - 0.35f, eyeP.z).rotate(Vector3.Y, yaw).scale(sx, sy, sx)
+                batch.render(pc, env)
+            } else {
+                canopy.transform.setToTranslation(eyeP.x, eyeP.y + 3.4f, eyeP.z)
+                batch.render(canopy, env)
+            }
+        }
+        for (vh in vehicles) {
+            val vdx = vh.x - cam.position.x
+            val vdz = vh.z - cam.position.z
+            if (vdx * vdx + vdz * vdz > 260f * 260f) continue
+            if (!cam.frustum.sphereInFrustum(vh.x, vh.y + 1f, vh.z, 3.5f)) continue
+            val inst = (if (vh.type == 0) carInst else bikeInst) ?: continue
+            inst.transform.setToTranslation(vh.x, vh.y, vh.z).rotate(Vector3.Y, vh.yaw + 180f).rotate(Vector3.X, -vh.pitch)
+            batch.render(inst, env)
+        }
+        val dvh = driving
+        if (dvh != null && dvh.type == 1 && pa != null && humansOk) {
+            val bi = bikeInst
+            if (bi != null) {
+                play(pa, "Drive", 1f)
+                pa.ctrl.update(dt)
+                pa.inst.transform.set(bi.transform).translate(0f, 0.19f, 0.07f)
+                batch.render(pa.inst, env)
+                carry(pa, slots[cur].type, slots[1 - cur].type, false, false)
+            }
         }
         if (showBody && pa != null) {
             val moving = pMoving
@@ -1864,6 +2077,10 @@ class BattleGame : ApplicationAdapter() {
         if (medkits > 0 && hp < 100f) shapes.setColor(1f, 0.35f, 0.4f, 1f) else shapes.setColor(0.7f, 0.7f, 0.7f, 0.7f)
         shapes.rect(medX - 24f, h - medY - 7f, 48f, 14f)
         shapes.rect(medX - 7f, h - medY - 24f, 14f, 48f)
+        if (nearVeh != null || driving != null) {
+            shapes.setColor(0.1f, 0.45f, 0.75f, 0.75f)
+            shapes.circle(driveX, h - driveY, driveR)
+        }
         if (nl != null) {
             shapes.setColor(1f, 0.8f, 0.1f, 0.75f)
             shapes.circle(pickX, h - pickY, pickR)
@@ -2013,6 +2230,12 @@ class BattleGame : ApplicationAdapter() {
             val ddz = l.z - cam.position.z
             if (ddx * ddx + ddz * ddz < 120f * 120f) shapes.circle(mcx + ddx * msc, mcy - ddz * msc, 2.2f)
         }
+        shapes.setColor(0.3f, 0.9f, 1f, 1f)
+        for (vh in vehicles) {
+            val ddx = vh.x - cam.position.x
+            val ddz = vh.z - cam.position.z
+            if (ddx * ddx + ddz * ddz < 120f * 120f) shapes.circle(mcx + ddx * msc, mcy - ddz * msc, 3f)
+        }
         if (planeActive) {
             val ddx = (planeX - cam.position.x) * msc
             val ddz = (planeZ - cam.position.z) * msc
@@ -2104,6 +2327,7 @@ class BattleGame : ApplicationAdapter() {
         label("PRONE", proneX, h - proneY)
         label(if (dropState == 0) "EJECT" else if (dropState == 1) "CHUTE" else "JUMP", jumpX, h - jumpY)
         if (nl != null) label("PICK", pickX, h - pickY)
+        if (nearVeh != null || driving != null) label(if (driving != null) "EXIT" else "DRIVE", driveX, h - driveY)
         font.data.setScale(3f)
 
         if (outside) centered("OUTSIDE ZONE! Run to the circle", h * 0.82f, w)
@@ -2277,6 +2501,8 @@ class BattleGame : ApplicationAdapter() {
         font.draw(sb, "-", bx - 9f, h - (h * 0.42f + 100f) + 16f)
         font.data.setScale(1.8f)
         centered("REALM OF ALMARAKAH   -   pinch or drag to zoom", my0 + mh + 46f, w)
+        font.data.setScale(1.0f)
+        centered("Credits (Sketchfab): Porsche 911 Carrera 4S by Karol Miklas, CC-BY-SA 4.0 | Retro bike by annzep, CC-BY 4.0 | PUBG Green Parachute by Skin-Tracker, CC-BY 4.0", 26f, w)
         font.data.setScale(3f)
         sb.end()
     }
@@ -2298,4 +2524,50 @@ fun segHitsBox(a: Vector3, b: Vector3, box: BoundingBox): Boolean {
     val ray = Ray(Vector3(a), dir.nor())
     val hit = Vector3()
     return Intersector.intersectRayBounds(ray, box, hit) && hit.dst(a) < len
+}
+
+
+class Vehicle(val type: Int, var x: Float, var z: Float, var yaw: Float) {
+    var y = 0f
+    var v = 0f
+    var pitch = 0f
+}
+
+// compact mesh files made from the 3D models: positions, normals and either vertex colours or UVs
+fun loadVMesh(file: String, tex: Texture?): Model {
+    val inp = DataInputStream(BufferedInputStream(Gdx.files.internal(file).read(), 1 shl 16))
+    val flags = inp.readUnsignedByte()
+    val nv = inp.readInt()
+    val ni = inp.readInt()
+    val stride = if (flags == 1) 8 else 7
+    val verts = FloatArray(nv * stride)
+    for (k in 0 until nv) {
+        val o = k * stride
+        for (q in 0..5) verts[o + q] = inp.readFloat()
+        if (flags == 1) {
+            verts[o + 6] = inp.readFloat()
+            verts[o + 7] = inp.readFloat()
+        } else {
+            val c = inp.readInt()
+            verts[o + 6] = Color.toFloatBits((c ushr 24) and 255, (c ushr 16) and 255, (c ushr 8) and 255, 255)
+        }
+    }
+    val idx = ShortArray(ni)
+    for (k in 0 until ni) idx[k] = inp.readShort()
+    inp.close()
+    val mesh = if (flags == 1) Mesh(true, nv, ni, VertexAttribute.Position(), VertexAttribute.Normal(), VertexAttribute.TexCoords(0))
+    else Mesh(true, nv, ni, VertexAttribute.Position(), VertexAttribute.Normal(), VertexAttribute.ColorPacked())
+    mesh.setVertices(verts)
+    mesh.setIndices(idx)
+    val mat = Material(ColorAttribute.createDiffuse(0.9f, 0.9f, 0.9f, 1f), IntAttribute.createCullFace(0))
+    if (tex != null) mat.set(TextureAttribute.createDiffuse(tex))
+    val model = Model()
+    val node = Node()
+    node.id = "n"
+    node.parts.add(NodePart(MeshPart("p", mesh, 0, ni, GL20.GL_TRIANGLES), mat))
+    model.nodes.add(node)
+    model.meshes.add(mesh)
+    model.materials.add(mat)
+    model.manageDisposable(mesh)
+    return model
 }
