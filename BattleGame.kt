@@ -202,6 +202,9 @@ class BattleGame : ApplicationAdapter() {
     private var sprint = false
     private var carInst: ModelInstance? = null
     private var bikeInst: ModelInstance? = null
+    private var sbikeInst: ModelInstance? = null
+    private var mtbInst: ModelInstance? = null
+    private fun vehInst(t: Int): ModelInstance? = when (t) { 0 -> carInst; 1 -> bikeInst; 2 -> sbikeInst; else -> mtbInst }
     private var paraInst: ModelInstance? = null
     private val vehicles = ArrayList<Vehicle>()
     private var driving: Vehicle? = null
@@ -223,6 +226,7 @@ class BattleGame : ApplicationAdapter() {
         val dv = driving
         return if (dv == null) Vector3(back).scl(3.1f).add(rgt.scl(0.55f)).add(0f, 0.45f, 0f)
         else if (dv.type == 0) Vector3(back).scl(6.8f).add(0f, 1.6f, 0f)
+        else if (dv.type == 2) Vector3(back).scl(4.8f).add(0f, 1.1f, 0f)
         else Vector3(back).scl(4.2f).add(0f, 1.0f, 0f)
     }
 
@@ -399,6 +403,8 @@ class BattleGame : ApplicationAdapter() {
     private fun loadVehicles() {
         try { carInst = ModelInstance(loadVMesh("car.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "car missing", e) }
         try { bikeInst = ModelInstance(loadVMesh("bike.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "bike missing", e) }
+        try { sbikeInst = ModelInstance(loadVMesh("sbike.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "sbike missing", e) }
+        try { mtbInst = ModelInstance(loadVMesh("bike2.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "mtb missing", e) }
         try { paraInst = ModelInstance(loadVMesh("para.vmesh", getTex("para.jpg")).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "parachute missing", e) }
     }
 
@@ -955,7 +961,7 @@ class BattleGame : ApplicationAdapter() {
     // ------------------------------------------------------------------
     // vehicles: Porsche (type 0) and retro bike (type 1)
     // ------------------------------------------------------------------
-    private fun vehHalf(vh: Vehicle): Float = if (vh.type == 0) 1.9f else 0.8f
+    private fun vehHalf(vh: Vehicle): Float = when (vh.type) { 0 -> 1.9f; 2 -> 1.0f; else -> 0.8f }
 
     private fun placeVehicle(vh: Vehicle, snap: Boolean, dt: Float) {
         val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, vh.yaw)
@@ -994,7 +1000,7 @@ class BattleGame : ApplicationAdapter() {
                 collide(p, 2.4f, world.h(x, z))
                 if (abs(p.x - x) + abs(p.z - z) > 0.05f) continue
                 if (abs(world.h(x + 3f, z) - world.h(x - 3f, z)) > 1.0f || abs(world.h(x, z + 3f) - world.h(x, z - 3f)) > 1.0f) continue
-                val vh = Vehicle(if (i % 2 == 0) 0 else 1, x, z, rnd.nextFloat() * 360f)
+                val vh = Vehicle(when (i % 4) { 0 -> 0; 1 -> 1; 2 -> 2; else -> 3 }, x, z, rnd.nextFloat() * 360f)
                 placeVehicle(vh, true, 0f)
                 vehicles.add(vh)
                 break
@@ -1010,9 +1016,9 @@ class BattleGame : ApplicationAdapter() {
         sprint = false
         jumpV = 0f
         vh.v = 0f
-        eyeH = if (vh.type == 0) 1.2f else 1.55f
+        eyeH = when (vh.type) { 0 -> 1.2f; 2 -> 1.6f; else -> 1.55f }
         yaw = vh.yaw
-        msg = if (vh.type == 0) "Driving the Porsche - left stick: gas and steer" else "Riding the bike - left stick: pedal and steer"
+        msg = when (vh.type) { 0 -> "Driving the Porsche - left stick: gas and steer"; 2 -> "Sports bike - left stick: throttle and steer"; 3 -> "Mountain bike - left stick: pedal and steer"; else -> "Riding the bike - left stick: pedal and steer" }
         msgT = 3f
     }
 
@@ -1037,9 +1043,10 @@ class BattleGame : ApplicationAdapter() {
 
     private fun updateDriving(vh: Vehicle, dt: Float, mx: Float, my: Float) {
         val car = vh.type == 0
-        val maxF = if (car) 26f else 9f
+        val sport = vh.type == 2
+        val maxF = if (car) 26f else if (sport) 32f else 9f
         val maxR = if (car) -7f else -2.5f
-        val acc = if (car) 11f else 5f
+        val acc = if (car) 11f else if (sport) 14f else 5f
         if (my > 0.05f) vh.v += acc * my * dt * (if (vh.v < 0f) 2.5f else 1f)
         else if (my < -0.05f) vh.v += acc * my * dt * (if (vh.v > 0f) 1.8f else 0.8f)
         else {
@@ -1048,7 +1055,7 @@ class BattleGame : ApplicationAdapter() {
         }
         vh.v = vh.v.coerceIn(maxR, maxF)
         val sp = abs(vh.v)
-        val steer = (if (car) 80f else 105f) * minOf(1f, sp / 4f) * (if (vh.v >= 0f) 1f else -1f)
+        val steer = (if (car) 80f else if (sport) 90f else 105f) * minOf(1f, sp / 4f) * (if (vh.v >= 0f) 1f else -1f)
         vh.yaw -= mx * steer * dt
         val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, vh.yaw)
         val nx = vh.x + fwd.x * vh.v * dt
@@ -1913,17 +1920,17 @@ class BattleGame : ApplicationAdapter() {
             val vdz = vh.z - cam.position.z
             if (vdx * vdx + vdz * vdz > 260f * 260f) continue
             if (!cam.frustum.sphereInFrustum(vh.x, vh.y + 1f, vh.z, 3.5f)) continue
-            val inst = (if (vh.type == 0) carInst else bikeInst) ?: continue
+            val inst = vehInst(vh.type) ?: continue
             inst.transform.setToTranslation(vh.x, vh.y, vh.z).rotate(Vector3.Y, vh.yaw + 180f).rotate(Vector3.X, -vh.pitch)
             batch.render(inst, env)
         }
         val dvh = driving
-        if (dvh != null && dvh.type == 1 && pa != null && humansOk) {
-            val bi = bikeInst
+        if (dvh != null && dvh.type != 0 && pa != null && humansOk) {
+            val bi = vehInst(dvh.type)
             if (bi != null) {
                 play(pa, "Drive", 1f)
                 pa.ctrl.update(dt)
-                pa.inst.transform.set(bi.transform).translate(0f, 0.19f, 0.07f)
+                when (dvh.type) { 2 -> pa.inst.transform.set(bi.transform).translate(0f, 0.12f, -0.18f); 3 -> pa.inst.transform.set(bi.transform).translate(0f, 0.12f, -0.12f); else -> pa.inst.transform.set(bi.transform).translate(0f, 0.19f, 0.07f) }
                 batch.render(pa.inst, env)
                 carry(pa, slots[cur].type, slots[1 - cur].type, false, false)
             }
@@ -2502,7 +2509,7 @@ class BattleGame : ApplicationAdapter() {
         font.data.setScale(1.8f)
         centered("REALM OF ALMARAKAH   -   pinch or drag to zoom", my0 + mh + 46f, w)
         font.data.setScale(1.0f)
-        centered("Credits (Sketchfab): Porsche 911 Carrera 4S by Karol Miklas, CC-BY-SA 4.0 | Retro bike by annzep, CC-BY 4.0 | PUBG Green Parachute by Skin-Tracker, CC-BY 4.0", 26f, w)
+        centered("Credits (Sketchfab): Porsche 911 Carrera 4S by Karol Miklas, CC-BY-SA 4.0 | Retro bike by annzep, CC-BY 4.0 | PUBG Green Parachute by Skin-Tracker, CC-BY 4.0 | Sports Bike by Futurealiti, CC-BY 4.0 | Bike by T-FLEX CAD ST, CC-BY 4.0", 26f, w)
         font.data.setScale(3f)
         sb.end()
     }
