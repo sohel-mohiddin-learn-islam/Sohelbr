@@ -69,6 +69,7 @@ class ActorMeta(val handAimInv: Matrix4, val G: Vector3, val spineInv: Matrix4, 
 
 class Block(val x: Float, val z: Float, val hw: Float, val hd: Float, val h: Float, val y0: Float = 0f) {
     val box = BoundingBox(Vector3(x - hw, y0, z - hd), Vector3(x + hw, y0 + h, z + hd))
+    var mark = 0
 }
 
 class Part(val inst: ModelInstance, val ox: Float, val oy: Float, val oz: Float, val ry: Float, val rx: Float)
@@ -78,7 +79,7 @@ class WDef(
     val range: Float, val auto: Boolean, val viewScale: Float, val muzzleY: Float, val muzzleZ: Float
 )
 class Slot(var type: Int, var mag: Int)
-class Loot(var kind: Int, var x: Float, var z: Float, var mag: Int)
+class Loot(var kind: Int, var x: Float, var z: Float, var mag: Int, var y: Float = 0f)
 
 class BattleGame : ApplicationAdapter() {
     // ---- tuning ----
@@ -137,6 +138,15 @@ class BattleGame : ApplicationAdapter() {
     private var planeZ = 0f
     private val planeY = 350f
     private var mapOpen = false
+    private var mapZoom = 1f
+    private var mapCx = 0f
+    private var mapCz = 0f
+    private var pinchPrev = 0f
+    private var miniLvl = 1
+    private val miniRanges = floatArrayOf(160f, 320f, 640f)
+    private val bGrid = HashMap<Int, ArrayList<Block>>()
+    private val tmpB = ArrayList<Block>()
+    private var markStamp = 0
     private lateinit var world: TerrainWorld
     private var planeDX = 1f
     private var planeDZ = 0f
@@ -208,7 +218,7 @@ class BattleGame : ApplicationAdapter() {
         val off = Vector3(back).scl(3.1f).add(rgt.scl(0.55f)).add(0f, 0.45f, 0f)
         val full = off.len()
         val p = pv.add(off.nor().scl(minOf(tpLen, full)))
-        val gmin = world.h(p.x, p.z) + 0.5f
+        val gmin = world.groundY(p.x, p.z, pv.y - 1.0f) + 0.5f
         if (p.y < gmin) p.y = gmin
         return p
     }
@@ -261,6 +271,7 @@ class BattleGame : ApplicationAdapter() {
         world = TerrainWorld()
         world.load()
         blocks.addAll(world.blocks)
+        indexBlocks()
         env.set(ColorAttribute(ColorAttribute.Fog, 0.5f, 0.8f, 1f, 1f))
 
         // red box = fallback if the character files are missing
@@ -745,18 +756,24 @@ class BattleGame : ApplicationAdapter() {
 
     private fun addLoot(kind: Int, x: Float, z: Float) {
         val p = Vector3(x.coerceIn(-world.maxX, world.maxX), 1f, z.coerceIn(-world.maxZ, world.maxZ))
-        collide(p, 1.2f)
+        collide(p, 1.2f, world.h(p.x, p.z))
         if (!world.walkable(p.x, p.z) || world.h(p.x, p.z) < 0.4f) return
         val mag = if (kind <= 3) weapons[kind].mag else 0
-        loot.add(Loot(kind, p.x, p.z, mag))
+        loot.add(Loot(kind, p.x, p.z, mag, world.h(p.x, p.z)))
+    }
+
+    // loot lying on the floor of a building (any storey)
+    private fun addLootAt(kind: Int, x: Float, y: Float, z: Float) {
+        val mag = if (kind <= 3) weapons[kind].mag else 0
+        loot.add(Loot(kind, x, z, mag, y))
     }
 
     private fun spawnLoot(n: Int) {
         for (i in 0 until n) {
-            if (world.houses.isNotEmpty() && rnd.nextInt(100) < 62) {
-                // inside a house you can walk into
-                val hs = world.houses[rnd.nextInt(world.houses.size)]
-                addLoot(randKind(), hs[0] + (rnd.nextFloat() - 0.5f) * (hs[2] - 1.6f), hs[1] + (rnd.nextFloat() - 0.5f) * (hs[3] - 1.6f))
+            if (world.lootSpots.isNotEmpty() && rnd.nextInt(100) < 72) {
+                // on the floor inside a building (rooms and upper storeys)
+                val sp = world.lootSpots[rnd.nextInt(world.lootSpots.size)]
+                addLootAt(randKind(), sp[0], sp[1], sp[2])
                 continue
             }
             val b = blocks[rnd.nextInt(blocks.size)]
@@ -978,13 +995,46 @@ class BattleGame : ApplicationAdapter() {
         corpses.clear()
         spawnBots(botCount)
         loot.clear()
-        spawnLoot(520)
+        spawnLoot(760)
     }
 
     // push a position out of any building (circle vs box, top-down)
-    private fun collide(p: Vector3, rad: Float) {
-        world.collideCircles(p, rad)
+    private fun indexBlocks() {
+        bGrid.clear()
         for (b in blocks) {
+            val i0 = ((b.x - b.hw - world.X0) / 24f).toInt().coerceAtLeast(0)
+            val i1 = ((b.x + b.hw - world.X0) / 24f).toInt().coerceAtLeast(0)
+            val j0 = ((b.z - b.hd - world.Z0) / 24f).toInt().coerceAtLeast(0)
+            val j1 = ((b.z + b.hd - world.Z0) / 24f).toInt().coerceAtLeast(0)
+            for (j in j0..j1) for (i in i0..i1) bGrid.getOrPut(j * 512 + i) { ArrayList() }.add(b)
+        }
+    }
+
+    /** blocks whose cells touch the given rectangle (each block once) */
+    private fun nearBlocks(xa: Float, za: Float, xb: Float, zb: Float): ArrayList<Block> {
+        tmpB.clear()
+        markStamp++
+        val i0 = ((minOf(xa, xb) - world.X0) / 24f).toInt().coerceAtLeast(0)
+        val i1 = ((maxOf(xa, xb) - world.X0) / 24f).toInt().coerceAtLeast(0)
+        val j0 = ((minOf(za, zb) - world.Z0) / 24f).toInt().coerceAtLeast(0)
+        val j1 = ((maxOf(za, zb) - world.Z0) / 24f).toInt().coerceAtLeast(0)
+        for (j in j0..j1) for (i in i0..i1) {
+            val l = bGrid[j * 512 + i] ?: continue
+            for (b in l) {
+                if (b.mark != markStamp) {
+                    b.mark = markStamp
+                    tmpB.add(b)
+                }
+            }
+        }
+        return tmpB
+    }
+
+    // feet = height of the feet, so furniture and walls of other storeys are ignored
+    private fun collide(p: Vector3, rad: Float, feet: Float = p.y - 1.7f) {
+        world.collideCircles(p, rad)
+        for (b in nearBlocks(p.x - rad, p.z - rad, p.x + rad, p.z + rad)) {
+            if (feet + 1.5f < b.y0 + 0.1f || feet > b.y0 + b.h - 0.35f) continue
             val nx = p.x.coerceIn(b.x - b.hw, b.x + b.hw)
             val nz = p.z.coerceIn(b.z - b.hd, b.z + b.hd)
             val dx = p.x - nx
@@ -1017,7 +1067,9 @@ class BattleGame : ApplicationAdapter() {
     private fun wallDist(ray: Ray, maxD: Float): Float {
         var best = maxD
         val tmp = Vector3()
-        for (b in blocks) {
+        val ex = ray.origin.x + ray.direction.x * maxD
+        val ez = ray.origin.z + ray.direction.z * maxD
+        for (b in nearBlocks(ray.origin.x, ray.origin.z, ex, ez)) {
             if (Intersector.intersectRayBounds(ray, b.box, tmp)) {
                 val d = tmp.dst(ray.origin)
                 if (d < best) best = d
@@ -1070,7 +1122,7 @@ class BattleGame : ApplicationAdapter() {
 
     private fun hasLos(a: Vector3, b: Vector3): Boolean {
         if (world.terrainBlocks(a.x, a.y, a.z, b.x, b.y, b.z)) return false
-        for (bl in blocks) {
+        for (bl in nearBlocks(a.x, a.z, b.x, b.z)) {
             if (segHitsBox(a, b, bl.box)) return false
         }
         return true
@@ -1129,7 +1181,7 @@ class BattleGame : ApplicationAdapter() {
             do {
                 p.set((rnd.nextFloat() - 0.5f) * (world.MW - 80f), 0f, (rnd.nextFloat() - 0.5f) * (world.MH - 80f))
             } while (!world.walkable(p.x, p.z) || world.h(p.x, p.z) < 1.2f)
-            collide(p, 0.8f)
+            collide(p, 0.8f, world.h(p.x, p.z))
             p.y = world.h(p.x, p.z)
             val bot = Bot(rnd.nextInt(2), rnd.nextInt(3), p)
             bot.target.set(p)
@@ -1206,6 +1258,10 @@ class BattleGame : ApplicationAdapter() {
         val mapX = 170f          // round minimap (screen coordinates, y down)
         val mapY = 170f
         val mapR = 150f
+        val zbX = 352f           // minimap zoom buttons
+        val zbY1 = 92f
+        val zbY2 = 152f
+        val zbR = 24f
         // Free Fire style layout: weapon panel top-right, 2 small weapon boxes under it
         val panelW = 440f
         val panelH = 135f
@@ -1245,8 +1301,9 @@ class BattleGame : ApplicationAdapter() {
             taps.clear()
             if (Gdx.input.justTouched()) restart()
         } else {
+            if (mapOpen) handleMapInput(w, h)
             for (i in 0..2) {
-                if (!Gdx.input.isTouched(i)) continue
+                if (!Gdx.input.isTouched(i) || mapOpen) continue
                 val x = Gdx.input.getX(i).toFloat()
                 val y = Gdx.input.getY(i).toFloat()
                 val dfx = x - fireX
@@ -1259,6 +1316,7 @@ class BattleGame : ApplicationAdapter() {
                     inCircle(x, y, jumpX, jumpY, jumpR * 1.15f) ||
                     inCircle(x, y, camX, camY, camR * 1.15f) ||
                     inCircle(x, y, mapX, mapY, mapR) ||
+                    inCircle(x, y, zbX, zbY1, zbR * 1.2f) || inCircle(x, y, zbX, zbY2, zbR * 1.2f) ||
                     slotHit(x, y) >= 0 ||
                     (nearLoot != null && inCircle(x, y, pickX, pickY, pickR * 1.15f))) {
                     // finger is on a button, not on movement or look
@@ -1287,7 +1345,7 @@ class BattleGame : ApplicationAdapter() {
             } else {
                 val stepV = Vector3(fwd).scl(my * speed * dt).add(Vector3(right).scl(mx * speed * dt))
                 moveOnLand(cam.position, stepV.x, stepV.z)
-                val ge = world.h(cam.position.x, cam.position.z) + 1.7f
+                val ge = world.groundY(cam.position.x, cam.position.z, cam.position.y - 1.7f) + 1.7f
                 if (jumpV != 0f || cam.position.y > ge + 0.6f) {
                     jumpV -= 18f * dt
                     cam.position.y += jumpV * dt
@@ -1327,8 +1385,8 @@ class BattleGame : ApplicationAdapter() {
                 val ldz = l.z - cam.position.z
                 val ld = sqrt(ldx * ldx + ldz * ldz)
                 if (l.kind >= 4) {
-                    if (dropState == 3 && ld < 2.2f && applyItem(l)) loot.removeAt(li)
-                } else if (dropState == 3 && ld < nearD) {
+                    if (dropState == 3 && ld < 2.2f && abs(l.y - (cam.position.y - 1.7f)) < 2.2f && applyItem(l)) loot.removeAt(li)
+                } else if (dropState == 3 && ld < nearD && abs(l.y - (cam.position.y - 1.7f)) < 2.2f) {
                     near = l
                     nearD = ld
                 }
@@ -1341,9 +1399,17 @@ class BattleGame : ApplicationAdapter() {
                 val tx = t[0]
                 val ty = t[1]
                 if (mapOpen) {
-                    mapOpen = false
+                    // handled by the map screen
+                } else if (inCircle(tx, ty, zbX, zbY1, zbR * 1.2f)) {
+                    miniLvl = maxOf(0, miniLvl - 1)
+                } else if (inCircle(tx, ty, zbX, zbY2, zbR * 1.2f)) {
+                    miniLvl = minOf(miniRanges.size - 1, miniLvl + 1)
                 } else if (inCircle(tx, ty, mapX, mapY, mapR)) {
                     mapOpen = true
+                    mapZoom = 1f
+                    mapCx = 0f
+                    mapCz = 0f
+                    pinchPrev = 0f
                 } else if (inCircle(tx, ty, reloadX, reloadY, reloadR * 1.15f)) {
                     tryReload()
                 } else if (inCircle(tx, ty, medX, medY, medR * 1.15f)) {
@@ -1560,8 +1626,8 @@ class BattleGame : ApplicationAdapter() {
                 b.yaw = turnTo(b.yaw, faceYaw, 480f * dt)
                 b.pos.x = b.pos.x.coerceIn(-world.maxX, world.maxX)
                 b.pos.z = b.pos.z.coerceIn(-world.maxZ, world.maxZ)
-                collide(b.pos, 0.8f)
-                b.pos.y = world.h(b.pos.x, b.pos.z)
+                collide(b.pos, 0.8f, b.pos.y)
+                b.pos.y = world.groundY(b.pos.x, b.pos.z, b.pos.y)
 
                 b.shooting = los || rivalFire
                 b.moving = moved
@@ -1678,7 +1744,7 @@ class BattleGame : ApplicationAdapter() {
             val dz = l.z - cam.position.z
             if (dx * dx + dz * dz > 120f * 120f) continue
             val bi = beams[l.kind]
-            val lgh = world.h(l.x, l.z)
+            val lgh = l.y
             bi.transform.setToTranslation(l.x, lgh + 4.5f, l.z)
             batch.render(bi, env)
             val lb = Matrix4()
@@ -1839,7 +1905,7 @@ class BattleGame : ApplicationAdapter() {
         // round minimap (top-left), centred on you, north is up
         val mcx = mapX
         val mcy = h - mapY
-        val mrw = 320f                       // metres shown from the centre to the rim
+        val mrw = miniRanges[miniLvl]                       // metres shown from the centre to the rim
         val msc = mapR / mrw
         shapes.setColor(0f, 0f, 0f, 0.65f)
         shapes.circle(mcx, mcy, mapR + 5f, 64)
@@ -1935,6 +2001,11 @@ class BattleGame : ApplicationAdapter() {
         shapes.setColor(1f, 1f, 0f, 1f)
         shapes.line(mcx, mcy, mcx + cam.direction.x * 28f, mcy - cam.direction.z * 28f)
         shapes.end()
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
+        shapes.setColor(0f, 0f, 0f, 0.6f)
+        shapes.circle(zbX, h - zbY1, zbR, 24)
+        shapes.circle(zbX, h - zbY2, zbR, 24)
+        shapes.end()
 
         sb.begin()
         if (!won) {
@@ -1947,6 +2018,10 @@ class BattleGame : ApplicationAdapter() {
         centered("ALIVE ${bots.size + (if (hp > 0f) 1 else 0)}    KILLS $kills    ${fmt(1200f - matchTime)}", h - 95f, w * 0.76f)
         font.data.setScale(1.4f)
         font.draw(sb, "FPS ${Gdx.graphics.framesPerSecond}", 410f, h - 20f)
+        font.data.setScale(2.2f)
+        font.setColor(1f, 1f, 1f, 1f)
+        font.draw(sb, "+", zbX - 9f, h - zbY1 + 14f)
+        font.draw(sb, "-", zbX - 6f, h - zbY2 + 12f)
         font.data.setScale(1.5f)
         font.draw(sb, world.placeName(cam.position.x, cam.position.z), 20f, h - 345f)
         font.data.setScale(0.9f)
@@ -2014,42 +2089,123 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
     }
 
+    // ---- full screen map: pinch / drag / +,- buttons --------------------------
+    private fun fullMapRect(w: Float, h: Float): FloatArray {
+        val mw = minOf(w * 0.86f, h * 0.84f * world.MW / world.MH)
+        val mh = mw * world.MH / world.MW
+        return floatArrayOf((w - mw) / 2f, (h - mh) / 2f - 14f, mw, mh)
+    }
+
+    private fun mapBtnX(w: Float) = w - 80f
+
+    private fun handleMapInput(w: Float, h: Float) {
+        val rc = fullMapRect(w, h)
+        val bx = mapBtnX(w)
+        val byClose = 70f
+        val byIn = h * 0.42f
+        val byOut = h * 0.42f + 100f
+        val fs0 = rc[2] / world.MW
+        for (t in taps) {
+            val tx = t[0]
+            val ty = t[1]
+            if (inCircle(tx, ty, bx, byClose, 44f)) mapOpen = false
+            else if (inCircle(tx, ty, bx, byIn, 44f)) mapZoom = minOf(8f, mapZoom * 1.6f)
+            else if (inCircle(tx, ty, bx, byOut, 44f)) mapZoom = maxOf(1f, mapZoom / 1.6f)
+        }
+        taps.clear()
+        val t0 = Gdx.input.isTouched(0)
+        val t1 = Gdx.input.isTouched(1)
+        val fs = fs0 * mapZoom
+        if (t0 && t1) {
+            val dx = (Gdx.input.getX(0) - Gdx.input.getX(1)).toFloat()
+            val dy = (Gdx.input.getY(0) - Gdx.input.getY(1)).toFloat()
+            val d = sqrt(dx * dx + dy * dy)
+            if (pinchPrev > 10f && d > 10f) mapZoom = (mapZoom * d / pinchPrev).coerceIn(1f, 8f)
+            pinchPrev = d
+        } else {
+            pinchPrev = 0f
+            if (t0) {
+                val x = Gdx.input.getX(0).toFloat()
+                val y = Gdx.input.getY(0).toFloat()
+                val onBtn = inCircle(x, y, bx, byClose, 50f) || inCircle(x, y, bx, byIn, 50f) || inCircle(x, y, bx, byOut, 50f)
+                if (!onBtn) {
+                    mapCx -= Gdx.input.getDeltaX(0) / fs
+                    mapCz -= Gdx.input.getDeltaY(0) / fs
+                }
+            }
+        }
+        val ww = rc[2] / (fs0 * mapZoom) / 2f
+        val hh = rc[3] / (fs0 * mapZoom) / 2f
+        mapCx = if (ww >= world.MW / 2f) 0f else mapCx.coerceIn(world.X0 + ww, world.X0 + world.MW - ww)
+        mapCz = if (hh >= world.MH / 2f) 0f else mapCz.coerceIn(world.Z0 + hh, world.Z0 + world.MH - hh)
+    }
+
     // full screen map with every town name
     private fun drawFullMap(w: Float, h: Float) {
-        val mw = minOf(w * 0.94f, h * 0.88f * world.MW / world.MH)
-        val mh = mw * world.MH / world.MW
-        val mx0 = (w - mw) / 2f
-        val my0 = (h - mh) / 2f - 10f
-        val fs = mw / world.MW
+        val rc = fullMapRect(w, h)
+        val mx0 = rc[0]
+        val my0 = rc[1]
+        val mw = rc[2]
+        val mh = rc[3]
+        val fs = mw / world.MW * mapZoom
+        val ww = mw / fs / 2f
+        val hh = mh / fs / 2f
+        fun sx(wx: Float) = mx0 + mw / 2f + (wx - mapCx) * fs
+        fun sy(wz: Float) = my0 + mh / 2f - (wz - mapCz) * fs
         shapes.begin(ShapeRenderer.ShapeType.Filled)
-        shapes.setColor(0f, 0f, 0f, 0.82f)
+        shapes.setColor(0f, 0f, 0f, 0.86f)
         shapes.rect(0f, 0f, w, h)
         shapes.end()
+        // everything below is clipped to the map panel
         sb.begin()
+        sb.flush()
+        Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
+        Gdx.gl.glScissor(mx0.toInt(), my0.toInt(), mw.toInt(), mh.toInt())
         sb.setColor(1f, 1f, 1f, 1f)
-        sb.draw(world.colorTex, mx0, my0, mw, mh)
+        val u0 = (mapCx - ww - world.X0) / world.MW
+        val u1 = (mapCx + ww - world.X0) / world.MW
+        val vTop = (mapCz - hh - world.Z0) / world.MH
+        val vBot = (mapCz + hh - world.Z0) / world.MH
+        sb.draw(world.colorTex, mx0, my0, mw, mh, u0, vBot, u1, vTop)
         sb.end()
+        // danger area (outside the safe zone) tinted, safe zone rim in blue, next zone in white
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
+        shapes.setColor(0.15f, 0.3f, 1f, 0.26f)
+        run {
+            val segs = 120
+            val zr = zoneR
+            val big = zr + 6000f
+            for (k in 0 until segs) {
+                val a = k * 6.2831855f / segs
+                val b = (k + 1) * 6.2831855f / segs
+                val ix0 = sx(zoneCx + cos(a) * zr); val iy0 = sy(zoneCz + sin(a) * zr)
+                val ix1 = sx(zoneCx + cos(b) * zr); val iy1 = sy(zoneCz + sin(b) * zr)
+                val ox0 = sx(zoneCx + cos(a) * big); val oy0 = sy(zoneCz + sin(a) * big)
+                val ox1 = sx(zoneCx + cos(b) * big); val oy1 = sy(zoneCz + sin(b) * big)
+                shapes.triangle(ix0, iy0, ox0, oy0, ox1, oy1)
+                shapes.triangle(ix0, iy0, ox1, oy1, ix1, iy1)
+            }
+        }
+        shapes.setColor(1f, 1f, 1f, 1f)
+        for (tn in world.towns) shapes.circle(sx(tn.x), sy(tn.z), 4f)
+        shapes.end()
         Gdx.gl.glLineWidth(3f)
         shapes.begin(ShapeRenderer.ShapeType.Line)
-        shapes.setColor(0.3f, 0.5f, 1f, 1f)
-        shapes.circle(mx0 + (zoneCx - world.X0) * fs, my0 + mh - (zoneCz - world.Z0) * fs, zoneR * fs, 96)
+        shapes.setColor(0.35f, 0.55f, 1f, 1f)
+        shapes.circle(sx(zoneCx), sy(zoneCz), zoneR * fs, 128)
         if (!shrinking && !won) {
             shapes.setColor(1f, 1f, 1f, 1f)
-            shapes.circle(mx0 + (toCx - world.X0) * fs, my0 + mh - (toCz - world.Z0) * fs, toR * fs, 96)
+            shapes.circle(sx(toCx), sy(toCz), toR * fs, 128)
         }
-        shapes.setColor(1f, 1f, 1f, 0.8f)
-        shapes.rect(mx0, my0, mw, mh)
         shapes.end()
+        val ppx = sx(cam.position.x)
+        val ppy = sy(cam.position.z)
         shapes.begin(ShapeRenderer.ShapeType.Filled)
-        shapes.setColor(1f, 1f, 1f, 1f)
-        for (tn in world.towns) shapes.circle(mx0 + (tn.x - world.X0) * fs, my0 + mh - (tn.z - world.Z0) * fs, 4f)
-        val ppx = mx0 + (cam.position.x - world.X0) * fs
-        val ppy = my0 + mh - (cam.position.z - world.Z0) * fs
         shapes.setColor(1f, 1f, 0f, 1f)
         shapes.circle(ppx, ppy, 9f)
         if (planeActive) {
             shapes.setColor(1f, 1f, 1f, 1f)
-            shapes.circle(mx0 + (planeX - world.X0) * fs, my0 + mh - (planeZ - world.Z0) * fs, 8f)
+            shapes.circle(sx(planeX), sy(planeZ), 8f)
         }
         shapes.end()
         shapes.begin(ShapeRenderer.ShapeType.Line)
@@ -2057,30 +2213,43 @@ class BattleGame : ApplicationAdapter() {
         shapes.line(ppx, ppy, ppx + cam.direction.x * 34f, ppy - cam.direction.z * 34f)
         shapes.end()
         sb.begin()
-        font.data.setScale(1.15f)
+        font.data.setScale(if (mapZoom > 2.5f) 1.4f else 1.1f)
         for (tn in world.towns) {
-            val sx = mx0 + (tn.x - world.X0) * fs
-            val sy = my0 + mh - (tn.z - world.Z0) * fs
+            val tx = sx(tn.x)
+            val ty = sy(tn.z)
+            if (tx < mx0 || tx > mx0 + mw || ty < my0 || ty > my0 + mh) continue
             layout.setText(font, tn.name)
             font.setColor(0f, 0f, 0f, 0.95f)
-            font.draw(sb, tn.name, sx - layout.width / 2f + 1.5f, sy + 24f - 1.5f)
+            font.draw(sb, tn.name, tx - layout.width / 2f + 1.5f, ty + 24f - 1.5f)
             font.setColor(1f, 1f, 1f, 1f)
-            font.draw(sb, tn.name, sx - layout.width / 2f, sy + 24f)
+            font.draw(sb, tn.name, tx - layout.width / 2f, ty + 24f)
         }
-        font.data.setScale(2f)
-        centered("REALM OF ALMARAKAH  -  tap to close", my0 + mh + 42f, w)
+        sb.end()
+        Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
+        // frame, title and buttons
+        Gdx.gl.glLineWidth(3f)
+        shapes.begin(ShapeRenderer.ShapeType.Line)
+        shapes.setColor(1f, 1f, 1f, 0.85f)
+        shapes.rect(mx0, my0, mw, mh)
+        shapes.end()
+        val bx = mapBtnX(w)
+        shapes.begin(ShapeRenderer.ShapeType.Filled)
+        shapes.setColor(0.75f, 0.15f, 0.15f, 0.95f)
+        shapes.circle(bx, h - 70f, 40f, 32)
+        shapes.setColor(0.2f, 0.25f, 0.35f, 0.95f)
+        shapes.circle(bx, h - h * 0.42f, 40f, 32)
+        shapes.circle(bx, h - (h * 0.42f + 100f), 40f, 32)
+        shapes.end()
+        sb.begin()
+        font.setColor(1f, 1f, 1f, 1f)
+        font.data.setScale(2.6f)
+        font.draw(sb, "X", bx - 14f, h - 70f + 18f)
+        font.draw(sb, "+", bx - 13f, h - h * 0.42f + 18f)
+        font.draw(sb, "-", bx - 9f, h - (h * 0.42f + 100f) + 16f)
+        font.data.setScale(1.8f)
+        centered("REALM OF ALMARAKAH   -   pinch or drag to zoom", my0 + mh + 46f, w)
         font.data.setScale(3f)
         sb.end()
-    }
-
-    override fun dispose() {
-        batch.dispose()
-        shapes.dispose()
-        sb.dispose()
-        font.dispose()
-        models.forEach { it.dispose() }
-        world.dispose()
-        texCache.values.forEach { it.dispose() }
     }
 }
 

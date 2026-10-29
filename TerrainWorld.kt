@@ -35,6 +35,21 @@ import kotlin.math.sqrt
 
 class MapTown(val name: String, val x: Float, val z: Float, val r: Float)
 
+/** a staircase: surface rises from storey level-1 to storey level along its long axis */
+class Ramp(val x0: Float, val x1: Float, val z0: Float, val z1: Float, val alongX: Boolean, val inc: Boolean, val level: Int)
+
+/** a walkable multi-storey building */
+class Interior(val x0: Float, val x1: Float, val z0: Float, val z1: Float, val f: Float, val nf: Int, val fh: Float) {
+    val ramps = ArrayList<Ramp>()
+}
+
+private class BData(val x: Float, val z: Float, val hw: Float, val hd: Float, val hh: Float, val y0: Float,
+                    val wr: Float, val wg: Float, val wb: Float, val rr: Float, val rg: Float, val rb: Float,
+                    val roof: Int, val win: Int, val door: Int) {
+    var mask = 0
+    var f = 0f
+}
+
 private class MapChunk(val inst: ModelInstance, val box: BoundingBox, val cx: Float, val cz: Float, val mesh: Mesh? = null, val count: Int = 0) {
     var detail: ModelInstance? = null
 }
@@ -182,6 +197,13 @@ class TerrainWorld {
     private var rw = 721
     private var rh = 376
     val houses = ArrayList<FloatArray>()   // x, z, hw, hd, floor y of every house you can walk into
+    val interiors = ArrayList<Interior>()
+    private val intGrid = HashMap<Int, ArrayList<Interior>>()
+    val lootSpots = ArrayList<FloatArray>()  // x, floor y, z : free floor spots inside buildings
+    private val bdata = ArrayList<BData>()
+    private val doorZones = ArrayList<FloatArray>()
+    private val intChunks = ArrayList<MapChunk>()
+    var intDist = 110f
     private var cxs = FloatArray(0)
     private var czs = FloatArray(0)
     private var crs = FloatArray(0)
@@ -305,7 +327,8 @@ class TerrainWorld {
         // regions
         val rp = Pixmap(Gdx.files.internal("map_region.png"))
         regionPix = IntArray(rw * rh)
-        for (j in 0 until rh) for (i in 0 until rw) regionPix[j * rw + i] = (rp.getPixel(i, j) ushr 24) and 0xff
+        val rAlpha = rp.format == Pixmap.Format.Alpha
+        for (j in 0 until rh) for (i in 0 until rw) { val q = rp.getPixel(i, j); regionPix[j * rw + i] = if (rAlpha) q and 0xff else (q ushr 24) and 0xff }
         rp.dispose()
         for (n in info.get("regions")) regionNames.add(n.asString())
         for (t in info.get("towns")) towns.add(MapTown(t.getString("name"), t.getFloat("x"), t.getFloat("z"), t.getFloat("r")))
@@ -317,7 +340,15 @@ class TerrainWorld {
         colorTex.setWrap(Texture.TextureWrap.ClampToEdge, Texture.TextureWrap.ClampToEdge)
         try { colorTex.setAnisotropicFilter(4f) } catch (e: Throwable) { }
         // tiled detail texture for the close-up detail pass
-        val dp = Pixmap(Gdx.files.internal("map_detail.png"))
+        val dsrc = Pixmap(Gdx.files.internal("map_detail.png"))
+        val dp = Pixmap(dsrc.width, dsrc.height, Pixmap.Format.RGBA8888)
+        val dAlpha = dsrc.format == Pixmap.Format.Alpha
+        for (j in 0 until dsrc.height) for (i in 0 until dsrc.width) {
+            val q = dsrc.getPixel(i, j)
+            val v = if (dAlpha) q and 0xff else (q ushr 24) and 0xff
+            dp.drawPixel(i, j, (v shl 24) or (v shl 16) or (v shl 8) or 0xff)
+        }
+        dsrc.dispose()
         detailTex = Texture(dp, dp.format, true)
         dp.dispose()
         detailTex.setFilter(Texture.TextureFilter.MipMapLinearLinear, Texture.TextureFilter.Linear)
@@ -328,10 +359,136 @@ class TerrainWorld {
         detailMat = Material(ta, BlendingAttribute(GL20.GL_DST_COLOR, GL20.GL_SRC_COLOR),
             DepthTestAttribute(GL20.GL_LEQUAL, false))
 
+        readBuildings()
+        flattenBuildings()
         buildTerrain()
         buildObjects()
         buildColliderGrid()
         buildWater()
+    }
+
+    private fun skipFully(inp: DataInputStream, n: Long) {
+        var left = n
+        while (left > 0) {
+            val k = inp.skip(left)
+            if (k <= 0) { inp.readByte(); left-- } else left -= k
+        }
+    }
+
+    private fun readBuildings() {
+        val inp = DataInputStream(BufferedInputStream(Gdx.files.internal("map_obj.bin").read(), 1 shl 16))
+        val nT = inp.readInt()
+        skipFully(inp, nT * 10L)
+        val nR = inp.readInt()
+        skipFully(inp, nR * 13L)
+        val nB = inp.readInt()
+        for (t in 0 until nB) {
+            val x = inp.readFloat(); val z = inp.readFloat()
+            val hw = inp.readFloat(); val hd = inp.readFloat(); val hh = inp.readFloat(); val y0 = inp.readFloat()
+            val wr = inp.readUnsignedByte() / 255f; val wg = inp.readUnsignedByte() / 255f; val wb = inp.readUnsignedByte() / 255f
+            val rr = inp.readUnsignedByte() / 255f; val rg = inp.readUnsignedByte() / 255f; val rb = inp.readUnsignedByte() / 255f
+            val roof = inp.readByte().toInt(); val win = inp.readByte().toInt(); val door = inp.readByte().toInt()
+            val bd = BData(x, z, hw, hd, hh, y0, wr, wg, wb, rr, rg, rb, roof, win, door)
+            if (door in 1..4) {
+                val opp = when (door) { 1 -> 2; 2 -> 1; 3 -> 4; else -> 3 }
+                bd.mask = (1 shl (door - 1)) or (if (maxOf(hw, hd) >= 8f) (1 shl (opp - 1)) else 0)
+            }
+            bdata.add(bd)
+        }
+        inp.close()
+    }
+
+    /** level the ground under every walkable building so the floor sits exactly on the terrain */
+    private fun flattenBuildings() {
+        val locked = BooleanArray(W * H)
+        val m1 = 3.0f
+        val m2 = 5.0f
+        for (bd in bdata) {
+            if (bd.door !in 1..4) continue
+            var sum = 0f
+            var n = 0
+            var zz = bd.z - bd.hd
+            while (zz <= bd.z + bd.hd + 0.01f) {
+                var xx = bd.x - bd.hw
+                while (xx <= bd.x + bd.hw + 0.01f) { sum += h(xx, zz); n++; xx += 1.5f }
+                zz += 1.5f
+            }
+            bd.f = maxOf(if (n > 0) sum / n else h(bd.x, bd.z), bd.y0 + 0.6f)
+            val i0 = ((bd.x - bd.hw - m1 - m2 - X0) / STEP).toInt().coerceIn(0, W - 1)
+            val i1 = (((bd.x + bd.hw + m1 + m2 - X0) / STEP).toInt() + 1).coerceIn(0, W - 1)
+            val j0 = ((bd.z - bd.hd - m1 - m2 - Z0) / STEP).toInt().coerceIn(0, H - 1)
+            val j1 = (((bd.z + bd.hd + m1 + m2 - Z0) / STEP).toInt() + 1).coerceIn(0, H - 1)
+            for (j in j0..j1) for (i in i0..i1) {
+                val idx = j * W + i
+                if (locked[idx]) continue
+                val px = X0 + i * STEP
+                val pz = Z0 + j * STEP
+                val dx = maxOf(abs(px - bd.x) - bd.hw, 0f)
+                val dz = maxOf(abs(pz - bd.z) - bd.hd, 0f)
+                val d = sqrt(dx * dx + dz * dz)
+                if (d <= m1) {
+                    hs[idx] = bd.f
+                    locked[idx] = true
+                } else if (d < m1 + m2) {
+                    val u = (d - m1) / m2
+                    val w = 1f - u * u * (3f - 2f * u)
+                    hs[idx] = hs[idx] * (1f - w) + bd.f * w
+                }
+            }
+            // keep trees, rocks and props away from every doorway
+            for (d in 1..4) {
+                if ((bd.mask and (1 shl (d - 1))) == 0) continue
+                when (d) {
+                    1 -> doorZones.add(floatArrayOf(bd.x - 2.6f, bd.z + bd.hd, bd.x + 2.6f, bd.z + bd.hd + 5f))
+                    2 -> doorZones.add(floatArrayOf(bd.x - 2.6f, bd.z - bd.hd - 5f, bd.x + 2.6f, bd.z - bd.hd))
+                    3 -> doorZones.add(floatArrayOf(bd.x + bd.hw, bd.z - 2.6f, bd.x + bd.hw + 5f, bd.z + 2.6f))
+                    else -> doorZones.add(floatArrayOf(bd.x - bd.hw - 5f, bd.z - 2.6f, bd.x - bd.hw, bd.z + 2.6f))
+                }
+            }
+        }
+    }
+
+    private fun nearDoor(x: Float, z: Float): Boolean {
+        for (q in doorZones) if (x >= q[0] - 0.8f && x <= q[2] + 0.8f && z >= q[1] - 0.8f && z <= q[3] + 0.8f) return true
+        return false
+    }
+
+    private fun rampSteps(fh: Float): Int = maxOf(4, Math.round(fh / 0.2f))
+
+    private fun registerInterior(iv: Interior) {
+        interiors.add(iv)
+        val i0 = ((iv.x0 - X0) / 32f).toInt().coerceAtLeast(0)
+        val i1 = ((iv.x1 - X0) / 32f).toInt().coerceAtLeast(0)
+        val j0 = ((iv.z0 - Z0) / 32f).toInt().coerceAtLeast(0)
+        val j1 = ((iv.z1 - Z0) / 32f).toInt().coerceAtLeast(0)
+        for (j in j0..j1) for (i in i0..i1) intGrid.getOrPut(j * 1024 + i) { ArrayList() }.add(iv)
+    }
+
+    /** height of the floor you would stand on at (x,z); feet = current feet height (picks the right storey) */
+    fun groundY(x: Float, z: Float, feet: Float): Float {
+        var best = h(x, z)
+        if (interiors.isEmpty()) return best
+        val lst = intGrid[((z - Z0) / 32f).toInt().coerceAtLeast(0) * 1024 + ((x - X0) / 32f).toInt().coerceAtLeast(0)] ?: return best
+        for (iv in lst) {
+            if (x < iv.x0 || x > iv.x1 || z < iv.z0 || z > iv.z1) continue
+            for (r in iv.ramps) {
+                if (x < r.x0 || x > r.x1 || z < r.z0 || z > r.z1) continue
+                val t0 = if (r.alongX) (x - r.x0) / (r.x1 - r.x0) else (z - r.z0) / (r.z1 - r.z0)
+                val t = if (r.inc) t0 else 1f - t0
+                val n = rampSteps(iv.fh)
+                val s = minOf(floor(t * n) + 1f, n.toFloat()) / n
+                val y = iv.f + (r.level - 1) * iv.fh + s * iv.fh
+                if (y <= feet + 0.85f && y > best) best = y
+            }
+            for (k in 1 until iv.nf) {
+                var hole = false
+                for (r in iv.ramps) if (r.level == k && x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) hole = true
+                if (hole) continue
+                val y = iv.f + k * iv.fh
+                if (y <= feet + 0.85f && y > best) best = y
+            }
+        }
+        return best
     }
 
     private fun addCircle(x: Float, z: Float, r: Float) {
@@ -551,6 +708,17 @@ class TerrainWorld {
         val vx = ((MW / VEG).toInt() + 1)
         val vz = ((MH / VEG).toInt() + 1)
         val builders = arrayOfNulls<VegBuilder>(vx * vz)
+        val ibuilders = arrayOfNulls<VegBuilder>(vx * vz)
+        fun ibld(x: Float, z: Float): VegBuilder {
+            val i = ((x - X0) / VEG).toInt().coerceIn(0, vx - 1)
+            val j = ((z - Z0) / VEG).toInt().coerceIn(0, vz - 1)
+            var b = ibuilders[j * vx + i]
+            if (b == null) {
+                b = VegBuilder()
+                ibuilders[j * vx + i] = b
+            }
+            return b
+        }
         fun bld(x: Float, z: Float): VegBuilder {
             val i = ((x - X0) / VEG).toInt().coerceIn(0, vx - 1)
             val j = ((z - Z0) / VEG).toInt().coerceIn(0, vz - 1)
@@ -569,6 +737,7 @@ class TerrainWorld {
             val z = inp.readFloat()
             val type = inp.readByte().toInt()
             val s = inp.readByte().toInt() / 50f
+            if (nearDoor(x, z)) continue
             addTree(bld(x, z), x, h(x, z) - 0.15f, z, type, s, rnd)
             val tr = when (type) { 0, 1 -> 0.45f * s; 2 -> 0.5f * s; 3 -> 0.6f * s; 4 -> 0.3f * s; 5 -> 0.55f * s; else -> 0.35f * s }
             addCircle(x, z, tr)
@@ -579,29 +748,14 @@ class TerrainWorld {
             val z = inp.readFloat()
             val sz = inp.readFloat()
             val cls = inp.readByte().toInt()
+            if (nearDoor(x, z)) continue
             addRock(bld(x, z), x, h(x, z), z, sz, cls, rnd)
             addCircle(x, z, sz * 0.85f)
         }
-        val nB = inp.readInt()
-        for (t in 0 until nB) {
-            val x = inp.readFloat()
-            val z = inp.readFloat()
-            val hw = inp.readFloat()
-            val hd = inp.readFloat()
-            val hh = inp.readFloat()
-            val y0 = inp.readFloat()
-            val wr = inp.readUnsignedByte() / 255f
-            val wg = inp.readUnsignedByte() / 255f
-            val wb = inp.readUnsignedByte() / 255f
-            val rr = inp.readUnsignedByte() / 255f
-            val rg = inp.readUnsignedByte() / 255f
-            val rb = inp.readUnsignedByte() / 255f
-            val roof = inp.readByte().toInt()
-            val win = inp.readByte().toInt()
-            val door = inp.readByte().toInt()
-            if (door !in 1..4) blocks.add(Block(x, z, hw, hd, hh, y0))
-            else houses.add(floatArrayOf(x, z, hw, hd, y0 + 0.6f))
-            addBuilding(bld(x, z), x, z, hw, hd, hh, y0, cb(wr, wg, wb), cb(rr, rg, rb), roof, win != 0, door, rnd)
+        for (bd in bdata) {
+            if (bd.door !in 1..4) blocks.add(Block(bd.x, bd.z, bd.hw, bd.hd, bd.hh, bd.y0))
+            else houses.add(floatArrayOf(bd.x, bd.z, bd.hw, bd.hd, bd.f))
+            addBuilding(bld(bd.x, bd.z), ibld(bd.x, bd.z), bd, cb(bd.wr, bd.wg, bd.wb), cb(bd.rr, bd.rg, bd.rb), rnd)
         }
         inp.close()
         // props: crates, barrels, lamps, haystacks, wells, bushes
@@ -613,6 +767,7 @@ class TerrainWorld {
             val type = pin.readUnsignedByte()
             val rot = pin.readUnsignedByte() * 6.2831855f / 255f
             val sc = pin.readUnsignedByte() / 40f
+            if (nearDoor(x, z)) continue
             addProp(bld(x, z), x, h(x, z), z, type, rot, sc, rnd)
         }
         pin.close()
@@ -621,25 +776,23 @@ class TerrainWorld {
             ColorAttribute.createDiffuse(0.72f, 0.72f, 0.72f, 1f),
             IntAttribute.createCullFace(0)
         )
-        for (j in 0 until vz) for (i in 0 until vx) {
-            val b = builders[j * vx + i] ?: continue
-            b.flush()
-            val box = BoundingBox()
-            var first = true
-            for (piece in b.pieces) {
-                val nv = piece.size / 7
-                val mesh = Mesh(true, nv, 0, VertexAttribute.Position(), VertexAttribute.Normal(), VertexAttribute.ColorPacked())
-                mesh.setVertices(piece)
-                val inst = ModelInstance(makeModel(mesh, nv, mat))
-                val cx = X0 + (i + 0.5f) * VEG
-                val cz = Z0 + (j + 0.5f) * VEG
-                if (first) {
-                    box.set(Vector3(X0 + i * VEG - 3f, -10f, Z0 + j * VEG - 3f), Vector3(X0 + (i + 1) * VEG + 3f, 90f, Z0 + (j + 1) * VEG + 3f))
-                    first = false
+        fun emit(arr: Array<VegBuilder?>, out: ArrayList<MapChunk>) {
+            for (j in 0 until vz) for (i in 0 until vx) {
+                val b = arr[j * vx + i] ?: continue
+                b.flush()
+                val box = BoundingBox()
+                box.set(Vector3(X0 + i * VEG - 3f, -10f, Z0 + j * VEG - 3f), Vector3(X0 + (i + 1) * VEG + 3f, 90f, Z0 + (j + 1) * VEG + 3f))
+                for (piece in b.pieces) {
+                    val nv = piece.size / 7
+                    val mesh = Mesh(true, nv, 0, VertexAttribute.Position(), VertexAttribute.Normal(), VertexAttribute.ColorPacked())
+                    mesh.setVertices(piece)
+                    val inst = ModelInstance(makeModel(mesh, nv, mat))
+                    out.add(MapChunk(inst, box, X0 + (i + 0.5f) * VEG, Z0 + (j + 0.5f) * VEG))
                 }
-                vegChunks.add(MapChunk(inst, box, cx, cz))
             }
         }
+        emit(builders, vegChunks)
+        emit(ibuilders, intChunks)
     }
 
     private fun addTree(b: VegBuilder, x: Float, y: Float, z: Float, type: Int, s: Float, r: Random) {
@@ -769,65 +922,65 @@ class TerrainWorld {
         }
     }
 
-    private fun addBuilding(b: VegBuilder, x: Float, z: Float, hw: Float, hd: Float, hh: Float, y0: Float,
-                            wall: Float, roofC: Float, roof: Int, windows: Boolean, door: Int, r: Random) {
+    private fun addBuilding(b: VegBuilder, ib: VegBuilder, bd: BData, wall: Float, roofC: Float, r: Random) {
+        val x = bd.x
+        val z = bd.z
+        val hw = bd.hw
+        val hd = bd.hd
+        val hh = bd.hh
+        val y0 = bd.y0
+        val roof = bd.roof
+        val windows = bd.win != 0
         val x0 = x - hw
         val x1 = x + hw
         val z0 = z - hd
         val z1 = z + hd
         val y1 = y0 + hh
-        val base = y0 + 0.6f
-        val hollow = door in 1..4
+        val hollow = bd.door in 1..4
+        val base = if (hollow) bd.f else y0 + 0.6f
+        val mask = bd.mask
+        val dS = hollow && (mask and 1) != 0   // door in the +z wall
+        val dN = hollow && (mask and 2) != 0   // -z wall
+        val dE = hollow && (mask and 4) != 0   // +x wall
+        val dW = hollow && (mask and 8) != 0   // -x wall
         if (hollow) {
             val t = 0.5f
-            val dw = 1.15f
-            val dTop = base + 2.4f
+            val dTop = base + 2.55f
             fun piece(ax: Float, az: Float, bx: Float, bz: Float, ya: Float, yb: Float, solid: Boolean) {
                 if (bx - ax < 0.01f || bz - az < 0.01f || yb - ya < 0.01f) return
                 b.box(ax, ya, az, bx, yb, bz, wall, wall, false)
                 if (solid) blocks.add(Block((ax + bx) / 2f, (az + bz) / 2f, (bx - ax) / 2f, (bz - az) / 2f, yb - ya, ya))
             }
+            val dwX = doorHalf(hw)
+            val dwZ = doorHalf(hd)
             // north (-z) and south (+z) walls run along x
             for (side in 0..1) {
                 val zz0 = if (side == 0) z0 else z1 - t
                 val zz1 = if (side == 0) z0 + t else z1
-                val hasDoor = (side == 0 && door == 2) || (side == 1 && door == 1)
+                val hasDoor = if (side == 0) dN else dS
                 if (hasDoor) {
-                    piece(x0, zz0, x - dw, zz1, y0, y1, true)
-                    piece(x + dw, zz0, x1, zz1, y0, y1, true)
-                    piece(x - dw, zz0, x + dw, zz1, dTop, y1, false)
+                    piece(x0, zz0, x - dwX, zz1, y0, y1, true)
+                    piece(x + dwX, zz0, x1, zz1, y0, y1, true)
+                    piece(x - dwX, zz0, x + dwX, zz1, dTop, y1, false)
                 } else piece(x0, zz0, x1, zz1, y0, y1, true)
             }
             // west (-x) and east (+x) walls run along z
             for (side in 0..1) {
                 val xx0 = if (side == 0) x0 else x1 - t
                 val xx1 = if (side == 0) x0 + t else x1
-                val hasDoor = (side == 0 && door == 4) || (side == 1 && door == 3)
+                val hasDoor = if (side == 0) dW else dE
                 if (hasDoor) {
-                    piece(xx0, z0 + t, xx1, z - dw, y0, y1, true)
-                    piece(xx0, z + dw, xx1, z1 - t, y0, y1, true)
-                    piece(xx0, z - dw, xx1, z + dw, dTop, y1, false)
+                    piece(xx0, z0 + t, xx1, z - dwZ, y0, y1, true)
+                    piece(xx0, z + dwZ, xx1, z1 - t, y0, y1, true)
+                    piece(xx0, z - dwZ, xx1, z + dwZ, dTop, y1, false)
                 } else piece(xx0, z0 + t, xx1, z1 - t, y0, y1, true)
             }
-            // wooden floor and a stone step in front of the door
-            val fl = cb(0.42f, 0.30f, 0.18f)
-            val fy = base + 0.07f
-            b.quad(x0 + t, fy, z1 - t, x1 - t, fy, z1 - t, x1 - t, fy, z0 + t, x0 + t, fy, z0 + t, fl)
-            val step = cb(0.50f, 0.49f, 0.47f)
-            when (door) {
-                1 -> b.box(x - 1.5f, base - 0.1f, z1, x + 1.5f, base + 0.14f, z1 + 0.9f, step, step, true)
-                2 -> b.box(x - 1.5f, base - 0.1f, z0 - 0.9f, x + 1.5f, base + 0.14f, z0, step, step, true)
-                3 -> b.box(x1, base - 0.1f, z - 1.5f, x1 + 0.9f, base + 0.14f, z + 1.5f, step, step, true)
-                else -> b.box(x0 - 0.9f, base - 0.1f, z - 1.5f, x0, base + 0.14f, z + 1.5f, step, step, true)
-            }
+            buildInterior(ib, bd, r)
         }
         when (roof) {
             0 -> {
-                if (hollow) {
-                    b.box(x0, y1, z0, x1, y1 + 0.4f, z1, wall, roofC, true)
-                    // ceiling seen from inside
-                    b.quad(x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, cb(0.55f, 0.5f, 0.42f))
-                } else b.box(x0, y0, z0, x1, y1, z1, wall, roofC, true)
+                if (hollow) b.box(x0, y1, z0, x1, y1 + 0.4f, z1, wall, roofC, true)
+                else b.box(x0, y0, z0, x1, y1 + 0.4f, z1, wall, roofC, true)
                 b.box(x0, y1 + 0.4f, z0, x1, y1 + 0.9f, z0 + 0.3f, wall, wall, true)
                 b.box(x0, y1 + 0.4f, z1 - 0.3f, x1, y1 + 0.9f, z1, wall, wall, true)
             }
@@ -878,8 +1031,8 @@ class TerrainWorld {
             while (u < x1 - 1.0f) {
                 var yy = base + 1.5f
                 while (yy + 1.3f < y1 - 0.4f) {
-                    if (!(door == 1 && abs(u + 0.5f - x) < 2.0f)) b.quad(u, yy, z1 + off, u + 1.0f, yy, z1 + off, u + 1.0f, yy + 1.2f, z1 + off, u, yy + 1.2f, z1 + off, glass)
-                    if (!(door == 2 && abs(u + 0.5f - x) < 2.0f)) b.quad(u + 1.0f, yy, z0 - off, u, yy, z0 - off, u, yy + 1.2f, z0 - off, u + 1.0f, yy + 1.2f, z0 - off, glass)
+                    if (!(dS && abs(u + 0.5f - x) < 2.4f)) b.quad(u, yy, z1 + off, u + 1.0f, yy, z1 + off, u + 1.0f, yy + 1.2f, z1 + off, u, yy + 1.2f, z1 + off, glass)
+                    if (!(dN && abs(u + 0.5f - x) < 2.4f)) b.quad(u + 1.0f, yy, z0 - off, u, yy, z0 - off, u, yy + 1.2f, z0 - off, u + 1.0f, yy + 1.2f, z0 - off, glass)
                     yy += 3.3f
                 }
                 u += 3.2f
@@ -888,14 +1041,315 @@ class TerrainWorld {
             while (w < z1 - 1.0f) {
                 var yy = base + 1.5f
                 while (yy + 1.3f < y1 - 0.4f) {
-                    if (!(door == 3 && abs(w + 0.5f - z) < 2.0f)) b.quad(x1 + off, yy, w + 1.0f, x1 + off, yy, w, x1 + off, yy + 1.2f, w, x1 + off, yy + 1.2f, w + 1.0f, glass)
-                    if (!(door == 4 && abs(w + 0.5f - z) < 2.0f)) b.quad(x0 - off, yy, w, x0 - off, yy, w + 1.0f, x0 - off, yy + 1.2f, w + 1.0f, x0 - off, yy + 1.2f, w, glass)
+                    if (!(dE && abs(w + 0.5f - z) < 2.4f)) b.quad(x1 + off, yy, w + 1.0f, x1 + off, yy, w, x1 + off, yy + 1.2f, w, x1 + off, yy + 1.2f, w + 1.0f, glass)
+                    if (!(dW && abs(w + 0.5f - z) < 2.4f)) b.quad(x0 - off, yy, w, x0 - off, yy, w + 1.0f, x0 - off, yy + 1.2f, w + 1.0f, x0 - off, yy + 1.2f, w, glass)
                     yy += 3.3f
                 }
                 w += 3.2f
             }
             if (!hollow) b.quad(x - 0.7f, base, z1 + off * 1.5f, x + 0.7f, base, z1 + off * 1.5f, x + 0.7f, base + 2.2f, z1 + off * 1.5f, x - 0.7f, base + 2.2f, z1 + off * 1.5f, door2)
         }
+    }
+
+    private fun doorHalf(len: Float): Float = minOf(1.3f, len * 0.36f)
+
+    /** rooms, stairs, upper floors, furniture and loot spots of a walkable building */
+    private fun buildInterior(ib: VegBuilder, bd: BData, r: Random) {
+        val t = 0.5f
+        val ix0 = bd.x - bd.hw + t
+        val ix1 = bd.x + bd.hw - t
+        val iz0 = bd.z - bd.hd + t
+        val iz1 = bd.z + bd.hd - t
+        val alongX = (ix1 - ix0) >= (iz1 - iz0)
+        val a0 = if (alongX) ix0 else iz0
+        val a1 = if (alongX) ix1 else iz1
+        val b0 = if (alongX) iz0 else ix0
+        val b1 = if (alongX) iz1 else ix1
+        val F = bd.f
+        val y1 = bd.y0 + bd.hh
+        val mask = bd.mask
+        val rs = Random((bd.x * 131f + bd.z * 17f).toLong() xor 0x5DEECE66DL)
+
+        fun abBox(aLo: Float, aHi: Float, bLo: Float, bHi: Float, yLo: Float, yHi: Float, wc: Float, tc: Float, top: Boolean) {
+            if (aHi - aLo < 0.01f || bHi - bLo < 0.01f || yHi - yLo < 0.005f) return
+            if (alongX) ib.box(aLo, yLo, bLo, aHi, yHi, bHi, wc, tc, top) else ib.box(bLo, yLo, aLo, bHi, yHi, aHi, wc, tc, top)
+        }
+        fun abBlock(aLo: Float, aHi: Float, bLo: Float, bHi: Float, yLo: Float, hgt: Float) {
+            if (aHi - aLo < 0.01f || bHi - bLo < 0.01f) return
+            if (alongX) blocks.add(Block((aLo + aHi) / 2f, (bLo + bHi) / 2f, (aHi - aLo) / 2f, (bHi - bLo) / 2f, hgt, yLo))
+            else blocks.add(Block((bLo + bHi) / 2f, (aLo + aHi) / 2f, (bHi - bLo) / 2f, (aHi - aLo) / 2f, hgt, yLo))
+        }
+        fun abFlat(aLo: Float, aHi: Float, bLo: Float, bHi: Float, y: Float, c: Float, up: Boolean) {
+            val xl = if (alongX) aLo else bLo
+            val xh = if (alongX) aHi else bHi
+            val zl = if (alongX) bLo else aLo
+            val zh = if (alongX) bHi else aHi
+            if (up) ib.quad(xl, y, zh, xh, y, zh, xh, y, zl, xl, y, zl, c)
+            else ib.quad(xl, y, zl, xh, y, zl, xh, y, zh, xl, y, zh, c)
+        }
+        fun wX(a: Float, bb: Float) = if (alongX) a else bb
+        fun wZ(a: Float, bb: Float) = if (alongX) bb else a
+
+        // doors in (A,B) space: clear zones
+        val clears = ArrayList<FloatArray>()    // aLo, aHi, bLo, bHi
+        var endDoorB = Float.NaN
+        var sideDoorA = Float.NaN
+        var sideDoorAtB0 = false
+        var sideDoorAtB1 = false
+        for (d in 1..4) {
+            if ((mask and (1 shl (d - 1))) == 0) continue
+            val onZWall = d <= 2
+            val aIsAlongWall = (alongX && onZWall) || (!alongX && !onZWall)   // wall runs along A => side wall
+            val centre = if (onZWall) bd.x else bd.z
+            val dw = if (onZWall) doorHalf(bd.hw) else doorHalf(bd.hd)
+            val plus = (d == 1 || d == 3)
+            if (aIsAlongWall) {
+                sideDoorA = centre
+                if (plus) sideDoorAtB1 = true else sideDoorAtB0 = true
+                clears.add(floatArrayOf(centre - dw - 0.4f, centre + dw + 0.4f, if (plus) b1 - 2.6f else b0, if (plus) b1 else b0 + 2.6f))
+            } else {
+                endDoorB = centre
+                clears.add(floatArrayOf(if (plus) a1 - 2.6f else a0, if (plus) a1 else a0 + 2.6f, centre - dw - 0.4f, centre + dw + 0.4f))
+            }
+        }
+
+        // storeys
+        var nf = 1
+        val avail = y1 - F
+        if (bd.hh >= 6.4f && a1 - a0 >= 8.5f && b1 - b0 >= 3.4f) nf = floor(avail / 3.4f).toInt().coerceIn(1, 3)
+        var fh = avail / nf
+        var rl = fh / 0.58f
+        if (nf >= 2 && rl > (a1 - a0) - 2.5f) nf = 1
+        if (nf == 3 && (b1 - b0 < 4.4f || (a1 - a0) < rl + 4f)) nf = 2
+        fh = avail / nf
+        rl = fh / 0.58f
+        val rampW = 1.6f
+
+        val wood = cb(0.46f, 0.33f, 0.20f)
+        val woodDark = cb(0.34f, 0.23f, 0.13f)
+        val plaster = cb(0.84f, 0.80f, 0.72f)
+        val ceilC = cb(0.62f, 0.58f, 0.50f)
+        val stepC = cb(0.52f, 0.40f, 0.26f)
+
+        val iv = Interior(ix0, ix1, iz0, iz1, F, nf, fh)
+        val aMinP: Float
+        var aMaxP = a1 - 2.0f
+        var aMinPart = a0 + 2.0f
+        if (nf >= 2) {
+            // stairs: ramp 1 from the near end, ramp 2 (3 storeys) from the far end, on opposite sides
+            val r1b0 = if (sideDoorAtB0) b1 - rampW else b0
+            val r2b0 = if (sideDoorAtB0) b0 else b1 - rampW
+            for (k in 1 until nf) {
+                val up = (k == 1)
+                val aLo = if (up) a0 + 0.05f else a1 - 0.05f - rl
+                val aHi = aLo + rl
+                val bLo = if (up) r1b0 else r2b0
+                val bHi = bLo + rampW
+                val ramp = if (alongX) Ramp(aLo, aHi, bLo, bHi, true, up, k) else Ramp(bLo, bHi, aLo, aHi, false, up, k)
+                iv.ramps.add(ramp)
+                clears.add(floatArrayOf(aLo - 1.5f, aHi + 1.5f, bLo - 0.4f, bHi + 0.4f))
+                // visible steps
+                val n = rampSteps(fh)
+                val dl = rl / n
+                val baseY = F + (k - 1) * fh
+                for (i in 0 until n) {
+                    val sa = if (up) aLo + i * dl else aHi - (i + 1) * dl
+                    abBox(sa, sa + dl, bLo, bHi, baseY, baseY + (i + 1) * fh / n, stepC, woodDark, true)
+                }
+                if (up) aMinPart = aHi + 0.7f else aMaxP = aLo - 0.7f
+            }
+            if (nf == 2) aMaxP = a1 - 2.0f
+        }
+        aMinP = aMinPart
+
+        // floor of the ground storey, ceiling under the roof
+        abFlat(a0, a1, b0, b1, F + 0.05f, wood, true)
+        abFlat(a0, a1, b0, b1, y1, ceilC, false)
+
+        // upper storeys: slabs with the stair holes cut out
+        for (k in 1 until nf) {
+            val y = F + k * fh
+            val hole = iv.ramps.first { it.level == k }
+            val hA0 = if (alongX) hole.x0 else hole.z0
+            val hA1 = if (alongX) hole.x1 else hole.z1
+            val hB0 = if (alongX) hole.z0 else hole.x0
+            val hB1 = if (alongX) hole.z1 else hole.x1
+            val holeAtLow = hB0 <= b0 + 0.5f
+            val bLow = if (holeAtLow) hB1 else b0
+            val bHigh = if (holeAtLow) b1 else hB0
+            val pieces = ArrayList<FloatArray>()
+            pieces.add(floatArrayOf(a0, a1, bLow, bHigh))
+            val sb0 = if (holeAtLow) b0 else hB0
+            val sb1 = if (holeAtLow) hB1 else b1
+            pieces.add(floatArrayOf(a0, hA0, sb0, sb1))
+            pieces.add(floatArrayOf(hA1, a1, sb0, sb1))
+            for (p in pieces) {
+                if (p[1] - p[0] < 0.02f || p[3] - p[2] < 0.02f) continue
+                abBox(p[0], p[1], p[2], p[3], y - 0.25f, y, plaster, wood, true)
+                abFlat(p[0], p[1], p[2], p[3], y - 0.25f, ceilC, false)
+            }
+        }
+
+        // partitions
+        val roomsA = ArrayList<Float>()   // partition positions along A
+        run {
+            val span = aMaxP - aMinP
+            val len = a1 - a0
+            val rooms = Math.round(len / 5.0f).coerceIn(1, 5)
+            if (nf == 1) {
+                val n = rooms - 1
+                for (i in 1..n) {
+                    val p = a0 + len * i / rooms
+                    if (!sideDoorA.isNaN() && abs(p - sideDoorA) < 2.2f) continue
+                    roomsA.add(p)
+                }
+            } else if (span > 3.5f) {
+                val n = Math.round(span / 5.0f).coerceIn(1, 4) - 1 + 1
+                for (i in 1..n) {
+                    val p = aMinP + span * i / (n + 1)
+                    if (!sideDoorA.isNaN() && abs(p - sideDoorA) < 2.2f) continue
+                    roomsA.add(p)
+                }
+            }
+        }
+        var pb = Float.NaN
+        if (b1 - b0 >= 9f && a1 - a0 >= 10f) {
+            var c = b0 + (b1 - b0) * 0.32f
+            if (!endDoorB.isNaN() && abs(c - endDoorB) < 2.4f) c = b0 + (b1 - b0) * 0.68f
+            if (endDoorB.isNaN() || abs(c - endDoorB) >= 2.4f) pb = c
+        }
+        val pw = 0.15f
+        val bBounds = ArrayList<Float>()
+        bBounds.add(b0)
+        if (!pb.isNaN()) { bBounds.add(pb - pw); bBounds.add(pb + pw) }
+        bBounds.add(b1)
+        val aBounds = ArrayList<Float>()
+        aBounds.add(a0)
+        for (p in roomsA) { aBounds.add(p - pw); aBounds.add(p + pw) }
+        aBounds.add(a1)
+
+        for (k in 0 until nf) {
+            val ly = if (k == 0) F else F + k * fh
+            val ph = if (k < nf - 1) fh - 0.3f else y1 - ly
+            // doorway helper: wall piece with a gap in the middle
+            fun wallSeg(isAPart: Boolean, pos: Float, lo: Float, hi: Float) {
+                val len = hi - lo
+                if (len < 0.3f) return
+                fun seg(l: Float, h2: Float, solid: Boolean, yl: Float, yh: Float) {
+                    if (h2 - l < 0.01f) return
+                    if (isAPart) abBox(pos - pw, pos + pw, l, h2, yl, yh, plaster, plaster, false)
+                    else abBox(l, h2, pos - pw, pos + pw, yl, yh, plaster, plaster, false)
+                    if (solid) {
+                        if (isAPart) abBlock(pos - pw, pos + pw, l, h2, yl, yh - yl) else abBlock(l, h2, pos - pw, pos + pw, yl, yh - yl)
+                    }
+                }
+                if (len >= 2.7f) {
+                    val c = (lo + hi) / 2f + (rs.nextFloat() - 0.5f) * (len - 2.7f) * 0.5f
+                    seg(lo, c - 0.85f, true, ly, ly + ph)
+                    seg(c + 0.85f, hi, true, ly, ly + ph)
+                    seg(c - 0.85f, c + 0.85f, false, ly + 2.4f, ly + ph)
+                    if (k == 0) {
+                        if (isAPart) clears.add(floatArrayOf(pos - 1.2f, pos + 1.2f, c - 1.2f, c + 1.2f))
+                        else clears.add(floatArrayOf(c - 1.2f, c + 1.2f, pos - 1.2f, pos + 1.2f))
+                    }
+                } else seg(lo, hi, true, ly, ly + ph)
+            }
+            for (p in roomsA) {
+                var i = 0
+                while (i < bBounds.size) { wallSeg(true, p, bBounds[i], bBounds[i + 1]); i += 2 }
+            }
+            if (!pb.isNaN()) {
+                var i = 0
+                while (i < aBounds.size) { wallSeg(false, pb, aBounds[i], aBounds[i + 1]); i += 2 }
+            }
+        }
+
+        // rooms: furniture and loot spots per storey
+        for (k in 0 until nf) {
+            val ly = F + k * fh
+            val fy = if (k == 0) F + 0.05f else ly
+            var ai = 0
+            while (ai < aBounds.size) {
+                val ra0 = aBounds[ai] + (if (ai > 0) pw + 0.05f else 0.05f)
+                val ra1 = aBounds[ai + 1] - (if (ai + 1 < aBounds.size - 1) pw + 0.05f else 0.05f)
+                ai += 2
+                var bi = 0
+                while (bi < bBounds.size) {
+                    val rb0 = bBounds[bi] + (if (bi > 0) pw + 0.05f else 0.05f)
+                    val rb1 = bBounds[bi + 1] - (if (bi + 1 < bBounds.size - 1) pw + 0.05f else 0.05f)
+                    bi += 2
+                    if (ra1 - ra0 < 2.2f || rb1 - rb0 < 2.2f) continue
+                    val placed = ArrayList<FloatArray>()
+                    fun free(aLo: Float, aHi: Float, bLo: Float, bHi: Float, m: Float): Boolean {
+                        if (aLo < ra0 || aHi > ra1 || bLo < rb0 || bHi > rb1) return false
+                        for (c in clears) if (aLo < c[1] && aHi > c[0] && bLo < c[3] && bHi > c[2]) return false
+                        for (f in placed) if (aLo - m < f[1] && aHi + m > f[0] && bLo - m < f[3] && bHi + m > f[2]) return false
+                        return true
+                    }
+                    // rug
+                    if ((ra1 - ra0) > 3.4f && (rb1 - rb0) > 3.4f && rs.nextInt(100) < 55) {
+                        val cx = (ra0 + ra1) / 2f
+                        val cy = (rb0 + rb1) / 2f
+                        val rc = when (rs.nextInt(3)) { 0 -> cb(0.60f, 0.18f, 0.16f); 1 -> cb(0.16f, 0.30f, 0.50f); else -> cb(0.28f, 0.45f, 0.28f) }
+                        abFlat(cx - 1.2f, cx + 1.2f, cy - 0.8f, cy + 0.8f, fy + 0.02f, rc, true)
+                    }
+                    val area = (ra1 - ra0) * (rb1 - rb0)
+                    val want = minOf(6, (area / 5.5f).toInt())
+                    var made = 0
+                    var tries = 0
+                    while (made < want && tries < 24) {
+                        tries++
+                        val ty = rs.nextInt(100)
+                        var sa: Float
+                        var sb: Float
+                        var hgt: Float
+                        var c1: Float
+                        var c2: Float
+                        var solid = true
+                        when {
+                            ty < 14 -> { sa = 2.0f; sb = 1.1f; hgt = 0.5f; c1 = cb(0.55f, 0.25f, 0.22f); c2 = cb(0.85f, 0.82f, 0.78f) }
+                            ty < 30 -> { sa = 1.5f; sb = 0.9f; hgt = 0.8f; c1 = wood; c2 = cb(0.58f, 0.42f, 0.26f) }
+                            ty < 40 -> { sa = 0.5f; sb = 0.5f; hgt = 0.5f; c1 = woodDark; c2 = wood; solid = false }
+                            ty < 52 -> { sa = 1.2f; sb = 0.6f; hgt = 2.0f; c1 = woodDark; c2 = wood }
+                            ty < 64 -> { sa = 1.6f; sb = 0.4f; hgt = 1.9f; c1 = cb(0.40f, 0.30f, 0.20f); c2 = wood }
+                            ty < 76 -> { sa = 2.0f; sb = 0.9f; hgt = 0.85f; c1 = cb(0.25f, 0.32f, 0.45f); c2 = cb(0.30f, 0.38f, 0.52f) }
+                            ty < 88 -> { sa = 0.9f; sb = 0.9f; hgt = 0.9f; c1 = cb(0.55f, 0.40f, 0.22f); c2 = cb(0.62f, 0.46f, 0.26f) }
+                            else -> { sa = 2.2f; sb = 0.65f; hgt = 0.95f; c1 = cb(0.78f, 0.76f, 0.72f); c2 = cb(0.35f, 0.33f, 0.31f) }
+                        }
+                        if (rs.nextBoolean()) { val tmp = sa; sa = sb; sb = tmp }
+                        val mode = rs.nextInt(4)
+                        var aLo: Float
+                        var bLo: Float
+                        when (mode) {
+                            0 -> { aLo = ra0 + 0.1f; bLo = rb0 + 0.1f + rs.nextFloat() * maxOf(0f, rb1 - rb0 - sb - 0.2f) }
+                            1 -> { aLo = ra1 - sa - 0.1f; bLo = rb0 + 0.1f + rs.nextFloat() * maxOf(0f, rb1 - rb0 - sb - 0.2f) }
+                            2 -> { bLo = rb0 + 0.1f; aLo = ra0 + 0.1f + rs.nextFloat() * maxOf(0f, ra1 - ra0 - sa - 0.2f) }
+                            else -> { bLo = rb1 - sb - 0.1f; aLo = ra0 + 0.1f + rs.nextFloat() * maxOf(0f, ra1 - ra0 - sa - 0.2f) }
+                        }
+                        if (!free(aLo, aLo + sa, bLo, bLo + sb, 0.5f)) continue
+                        placed.add(floatArrayOf(aLo, aLo + sa, bLo, bLo + sb))
+                        made++
+                        abBox(aLo, aLo + sa, bLo, bLo + sb, fy, fy + hgt, c1, c2, true)
+                        if (ty < 14) abBox(aLo + 0.05f, aLo + 0.45f, bLo + 0.1f, bLo + sb - 0.1f, fy + hgt, fy + hgt + 0.12f, cb(0.92f, 0.92f, 0.9f), cb(0.95f, 0.95f, 0.93f), true)
+                        if (ty in 52..63) abBox(aLo + 0.1f, aLo + sa - 0.1f, bLo + 0.05f, bLo + sb - 0.05f, fy + 0.5f, fy + 0.8f, cb(0.7f, 0.3f, 0.25f), cb(0.7f, 0.3f, 0.25f), true)
+                        if (solid) abBlock(aLo, aLo + sa, bLo, bLo + sb, fy, hgt)
+                    }
+                    // loot spots on the floor
+                    val wantL = if (area > 40f) 2 else 1
+                    var gotL = 0
+                    var lt = 0
+                    while (gotL < wantL && lt < 14) {
+                        lt++
+                        val pa = ra0 + 0.8f + rs.nextFloat() * (ra1 - ra0 - 1.6f)
+                        val pbb = rb0 + 0.8f + rs.nextFloat() * (rb1 - rb0 - 1.6f)
+                        if (!free(pa - 0.5f, pa + 0.5f, pbb - 0.5f, pbb + 0.5f, 0.2f)) continue
+                        lootSpots.add(floatArrayOf(wX(pa, pbb), fy, wZ(pa, pbb)))
+                        gotL++
+                    }
+                }
+            }
+        }
+        if (nf >= 2) registerInterior(iv)
     }
 
     // ------------------------------------------------------------------
@@ -937,6 +1391,14 @@ class TerrainWorld {
             val dx = c.cx - px
             val dz = c.cz - pz
             if (dx * dx + dz * dz > vd2) continue
+            if (!cam.frustum.boundsInFrustum(c.box)) continue
+            batch.render(c.inst, env)
+        }
+        val id2 = (intDist + 46f) * (intDist + 46f)
+        for (c in intChunks) {
+            val dx = c.cx - px
+            val dz = c.cz - pz
+            if (dx * dx + dz * dz > id2) continue
             if (!cam.frustum.boundsInFrustum(c.box)) continue
             batch.render(c.inst, env)
         }
