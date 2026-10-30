@@ -204,6 +204,34 @@ class BattleGame : ApplicationAdapter() {
     private var bikeInst: ModelInstance? = null
     private var sbikeInst: ModelInstance? = null
     private var mtbInst: ModelInstance? = null
+    private class WDef(val file: String, val x: Float, val y: Float, val z: Float, val r: Float, val steer: Boolean)
+    private val wheelDefs = arrayOf(
+        arrayOf(WDef("car_w0.vmesh", -0.718f, 0.295f, 1.113f, 0.295f, true), WDef("car_w1.vmesh", 0.674f, 0.295f, 1.18f, 0.295f, true),
+                WDef("car_w2.vmesh", -0.685f, 0.295f, -1.05f, 0.295f, false), WDef("car_w3.vmesh", 0.658f, 0.295f, -1.05f, 0.295f, false)),
+        arrayOf(WDef("bike_w0.vmesh", -0.034f, 0.362f, -0.566f, 0.362f, false), WDef("bike_w1.vmesh", -0.013f, 0.364f, 0.606f, 0.362f, true)),
+        arrayOf(WDef("sbike_w0.vmesh", 0.024f, 0.297f, 0.755f, 0.297f, true), WDef("sbike_w1.vmesh", -0.003f, 0.317f, -0.718f, 0.317f, false)),
+        arrayOf(WDef("bike2_w0.vmesh", 0.002f, 0.352f, 0.544f, 0.352f, true), WDef("bike2_w1.vmesh", -0.001f, 0.364f, -0.533f, 0.352f, false)))
+    private val wheelInst = arrayOfNulls<Array<ModelInstance?>>(4)
+    private val vTmp = Matrix4()
+    private val wTmp = Matrix4()
+    private fun vehMatrix(vh: Vehicle, out: Matrix4): Matrix4 =
+        out.setToTranslation(vh.x, vh.y, vh.z).rotate(Vector3.Y, vh.yaw + 180f).rotate(Vector3.X, -vh.pitch)
+    private fun drawVehicle(vh: Vehicle, m: Matrix4) {
+        val inst = vehInst(vh.type) ?: return
+        inst.transform.set(m)
+        batch.render(inst, env)
+        val ws = wheelInst[vh.type] ?: return
+        val defs = wheelDefs[vh.type]
+        for (i in defs.indices) {
+            val wi = ws[i] ?: continue
+            val d = defs[i]
+            wTmp.set(m).translate(d.x, d.y, d.z)
+            if (d.steer) wTmp.rotate(Vector3.Y, vh.steer)
+            wTmp.rotate(Vector3.X, vh.dist / d.r * 57.29578f)
+            wi.transform.set(wTmp)
+            batch.render(wi, env)
+        }
+    }
     private fun vehInst(t: Int): ModelInstance? = when (t) { 0 -> carInst; 1 -> bikeInst; 2 -> sbikeInst; else -> mtbInst }
     private var paraInst: ModelInstance? = null
     private val vehicles = ArrayList<Vehicle>()
@@ -405,6 +433,12 @@ class BattleGame : ApplicationAdapter() {
         try { bikeInst = ModelInstance(loadVMesh("bike.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "bike missing", e) }
         try { sbikeInst = ModelInstance(loadVMesh("sbike.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "sbike missing", e) }
         try { mtbInst = ModelInstance(loadVMesh("bike2.vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "mtb missing", e) }
+        for (t in 0..3) {
+            val defs = wheelDefs[t]
+            wheelInst[t] = Array(defs.size) { i ->
+                try { ModelInstance(loadVMesh(defs[i].file, null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "wheel missing", e); null }
+            }
+        }
         try { paraInst = ModelInstance(loadVMesh("para.vmesh", getTex("para.jpg")).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "parachute missing", e) }
     }
 
@@ -1074,6 +1108,8 @@ class BattleGame : ApplicationAdapter() {
             vh.x = p.x
             vh.z = p.z
         }
+        vh.dist += vh.v * dt
+        vh.steer += (-mx * 28f * (if (vh.v >= 0f) 1f else -1f) - vh.steer) * minOf(1f, dt * 8f)
         placeVehicle(vh, false, dt)
         cam.position.set(vh.x, vh.y + eyeH, vh.z)
         // camera swings behind the vehicle unless the player is looking around
@@ -1919,18 +1955,16 @@ class BattleGame : ApplicationAdapter() {
             val vdx = vh.x - cam.position.x
             val vdz = vh.z - cam.position.z
             if (vdx * vdx + vdz * vdz > 260f * 260f) continue
-            if (!cam.frustum.sphereInFrustum(vh.x, vh.y + 1f, vh.z, 3.5f)) continue
-            val inst = vehInst(vh.type) ?: continue
-            inst.transform.setToTranslation(vh.x, vh.y, vh.z).rotate(Vector3.Y, vh.yaw + 180f).rotate(Vector3.X, -vh.pitch)
-            batch.render(inst, env)
+            if (vh !== driving && !cam.frustum.sphereInFrustum(vh.x, vh.y + 1f, vh.z, 3.5f)) continue
+            drawVehicle(vh, vehMatrix(vh, vTmp))
         }
         val dvh = driving
         if (dvh != null && dvh.type != 0 && pa != null && humansOk) {
-            val bi = vehInst(dvh.type)
-            if (bi != null) {
+            val bm = vehMatrix(dvh, Matrix4())
+            if (dvh.type != 0) {
                 play(pa, "Drive", 1f)
                 pa.ctrl.update(dt)
-                when (dvh.type) { 2 -> pa.inst.transform.set(bi.transform).translate(0f, 0.12f, -0.18f); 3 -> pa.inst.transform.set(bi.transform).translate(0f, 0.12f, -0.12f); else -> pa.inst.transform.set(bi.transform).translate(0f, 0.19f, 0.07f) }
+                when (dvh.type) { 2 -> pa.inst.transform.set(bm).translate(0f, 0.12f, -0.18f); 3 -> pa.inst.transform.set(bm).translate(0f, 0.12f, -0.12f); else -> pa.inst.transform.set(bm).translate(0f, 0.19f, 0.07f) }
                 batch.render(pa.inst, env)
                 carry(pa, slots[cur].type, slots[1 - cur].type, false, false)
             }
@@ -2538,6 +2572,8 @@ class Vehicle(val type: Int, var x: Float, var z: Float, var yaw: Float) {
     var y = 0f
     var v = 0f
     var pitch = 0f
+    var dist = 0f
+    var steer = 0f
 }
 
 // compact mesh files made from the 3D models: positions, normals and either vertex colours or UVs
