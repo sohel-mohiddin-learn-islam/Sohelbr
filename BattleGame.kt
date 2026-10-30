@@ -135,7 +135,7 @@ class BattleGame : ApplicationAdapter() {
     private val tpProps = ArrayList<Prop>()      // guns without the first-person arms
     private val meta = arrayOfNulls<ActorMeta>(2)
     private val botModels = arrayOfNulls<Model>(2)
-    private val holdScale = floatArrayOf(1.0f, 0.9f, 0.85f, 0.75f)
+    private val holdScale = floatArrayOf(1.0f, 0.9f, 0.85f, 0.75f, 1f, 1f, 1f, 0.7f)
     private var pActor: Actor? = null
     private var pArmedT = 0f
     // plane drop: 0 = in the plane, 1 = free fall, 2 = parachute, 3 = on the ground
@@ -164,9 +164,9 @@ class BattleGame : ApplicationAdapter() {
     private var planeInst: ModelInstance? = null
     private var tpLen = 3.2f
     // grip point (in gun space) and distance between the two hands for each gun
-    private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f)
-    private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f)
-    private val holdD = floatArrayOf(0.18f, 0.33f, 0.48f, 0.50f)
+    private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f, 0f, 0f, 0f, -0.12f)
+    private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f, 0f, 0f, 0f, 0.12f)
+    private val holdD = floatArrayOf(0.18f, 0.33f, 0.48f, 0.50f, 0f, 0f, 0f, 0.45f)
     private val itemProps = ArrayList<Prop>()
     private val beams = ArrayList<ModelInstance>()
     private val loot = ArrayList<Loot>()
@@ -181,7 +181,17 @@ class BattleGame : ApplicationAdapter() {
     private var humansOk = false
     private val texCache = HashMap<String, Texture>()
 
-    private val slots = arrayOf(Slot(0, 12), Slot(-1, 0))
+    private val slots = arrayOf(Slot(0, 12), Slot(-1, 0), Slot(-1, 0))
+    private var bpLevel = 0
+    private val bpInst = arrayOfNulls<ModelInstance>(3)
+    private fun isGun(k: Int) = k in 0..3 || k == 7
+    private fun ammoCap() = intArrayOf(90, 150, 220, 300)[bpLevel]
+    private fun medCap() = intArrayOf(2, 3, 4, 6)[bpLevel]
+    private fun otherType(): Int {
+        for (d in 1..2) { val i = (cur + d) % 3; if (slots[i].type >= 0) return slots[i].type }
+        return -1
+    }
+    private fun lootName(k: Int): String = if (isGun(k)) weapons[k].name else if (k >= 8) "BACKPACK LV" + (k - 7) else "ITEM"
     private var cur = 0
     private var reserve = 36
     private var armor = 0f
@@ -439,6 +449,9 @@ class BattleGame : ApplicationAdapter() {
                 try { ModelInstance(loadVMesh(defs[i].file, null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "wheel missing", e); null }
             }
         }
+        for (k in 0..2) {
+            try { bpInst[k] = ModelInstance(loadVMesh("bp" + (k + 1) + ".vmesh", null).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "backpack missing", e) }
+        }
         try { paraInst = ModelInstance(loadVMesh("para.vmesh", getTex("para.jpg")).also { models.add(it) }) } catch (e: Throwable) { Gdx.app.error("BattleGame", "parachute missing", e) }
     }
 
@@ -499,22 +512,22 @@ class BattleGame : ApplicationAdapter() {
     private val vy = Vector3()
     private val vz = Vector3()
 
-    private fun drawActor(a: Actor, x: Float, y: Float, z: Float, yawDeg: Float, held: Int, back: Int, armed: Boolean, fire: Boolean) {
+    private fun drawActor(a: Actor, x: Float, y: Float, z: Float, yawDeg: Float, held: Int, back: Int, armed: Boolean, fire: Boolean, pk: Int = 0) {
         a.inst.transform.setToTranslation(x, y, z).rotate(Vector3.Y, yawDeg)
         batch.render(a.inst, env)
-        carry(a, held, back, armed, fire)
+        carry(a, held, back, armed, fire, pk)
     }
 
     // guns are slung on the back (like Free Fire); the current gun comes into the hands while shooting.
     // Everything follows the animated bones (hand_r and spine_03).
-    private fun carry(a: Actor, held: Int, back: Int, armed: Boolean, fire: Boolean) {
+    private fun carry(a: Actor, held: Int, back: Int, armed: Boolean, fire: Boolean, pk: Int = 0) {
         val mt = meta[a.g] ?: return
         val base = a.inst.transform
         var s1 = back
         var s2 = -1
         val hn = a.hand
         val sn = a.spine
-        if (armed && held in 0..3 && hn != null) {
+        if (armed && isGun(held) && hn != null) {
             val rel = Matrix4(hn.globalTransform).mul(mt.handAimInv)
             vz.set(0f, 0f, -1f)
             vy.set(0f, 1f, 0f)
@@ -533,8 +546,15 @@ class BattleGame : ApplicationAdapter() {
         }
         if (sn != null) {
             val sRel = Matrix4(base).mul(Matrix4(sn.globalTransform).mul(mt.spineInv))
-            if (s1 in 0..3) slung(sRel, mt.B, s1, 0)
-            if (s2 in 0..3) slung(sRel, mt.B, s2, 1)
+            if (isGun(s1)) slung(sRel, mt.B, s1, 0)
+            if (isGun(s2)) slung(sRel, mt.B, s2, 1)
+            if (pk > 0) {
+                val pi = bpInst[pk - 1]
+                if (pi != null) {
+                    pi.transform.set(sRel).translate(mt.B.x, mt.B.y - 0.08f, mt.B.z + 0.04f)
+                    batch.render(pi, env)
+                }
+            }
         }
     }
 
@@ -546,7 +566,7 @@ class BattleGame : ApplicationAdapter() {
         } else {
             // rifle strap over the back: barrel up over the shoulder, side of the gun against the back
             val tilt = if (slot == 0) 10f else -10f
-            val sc = if (type == 3) 0.7f else 0.8f
+            val sc = if (type == 7) 0.5f else if (type == 3) 0.7f else 0.8f
             bm.translate(B.x + (if (slot == 0) -0.03f else 0.03f), B.y - 0.12f, B.z - 0.04f - 0.05f * slot)
             bm.rotate(Vector3.Z, tilt).rotate(Vector3.X, 80f).rotate(Vector3.Z, 90f)
             bm.scale(sc, sc, sc).translate(0f, 0f, 0.2f)
@@ -666,6 +686,32 @@ class BattleGame : ApplicationAdapter() {
             weaponProps.add(Prop(p))
             weapons.add(WDef("SNIPER", 90f, 1.1f, 5, 2.6f, 500f, false, 0.8f, 0.01f, -1.01f))
         }
+        // dummy entries for the item kinds 4..6 so the minigun can be kind 7
+        for (k in 0 until 3) {
+            weapons.add(WDef("-", 0f, 1f, 1, 1f, 1f, false, 1f, 0f, 0f))
+            tpProps.add(Prop(ArrayList()))
+            weaponProps.add(Prop(ArrayList()))
+        }
+        // 7: MINIGUN (six barrels, heavy weapon box)
+        run {
+            val olive = Color(0.35f, 0.38f, 0.2f, 1f)
+            val p = ArrayList<Part>()
+            mk(p, 0.16f, 0.16f, 0.5f, dark, 0f, 0f, 0f)
+            mk(p, 0.10f, 0.10f, 0.3f, gray, 0f, 0.12f, 0.05f)
+            for (k in 0 until 6) {
+                val a = k * 1.0472f
+                mk(p, 0.03f, 0.03f, 0.7f, black, cos(a) * 0.055f, sin(a) * 0.055f, -0.6f)
+            }
+            mk(p, 0.16f, 0.16f, 0.04f, gray, 0f, 0f, -0.42f)
+            mk(p, 0.16f, 0.16f, 0.04f, gray, 0f, 0f, -0.80f)
+            mk(p, 0.06f, 0.15f, 0.08f, black, 0f, -0.15f, 0.12f)
+            mk(p, 0.22f, 0.24f, 0.30f, olive, 0.2f, -0.08f, 0.18f)
+            tpProps.add(Prop(ArrayList(p)))
+            addRightArm(p, -0.12f, 0.12f)
+            addLeftArm(p, -0.05f, -0.28f)
+            weaponProps.add(Prop(p))
+            weapons.add(WDef("MINIGUN", 9f, 0.055f, 150, 4.5f, 220f, true, 0.7f, 0f, -0.95f))
+        }
         // muzzle flash (drawn at the barrel tip)
         run {
             val p = ArrayList<Part>()
@@ -727,7 +773,11 @@ class BattleGame : ApplicationAdapter() {
             Color(1f, 0.8f, 0.1f, 1f),     // sniper
             Color(1f, 0.2f, 0.2f, 1f),     // medkit
             Color(1f, 0.6f, 0.1f, 1f),     // ammo
-            Color(0.2f, 0.9f, 1f, 1f)      // armor
+            Color(0.2f, 0.9f, 1f, 1f),     // armor
+            Color(1f, 0.25f, 0.1f, 1f),    // minigun
+            Color(0.85f, 0.55f, 0.2f, 1f), // backpack lv1
+            Color(0.3f, 0.5f, 1f, 1f),     // backpack lv2
+            Color(0.85f, 0.3f, 1f, 1f)     // backpack lv3
         )
         for (c in cols) {
             val m = mb.createBox(0.14f, 9f, 0.14f,
@@ -823,20 +873,21 @@ class BattleGame : ApplicationAdapter() {
 
     private fun randKind(): Int {
         val r = rnd.nextInt(100)
-        return if (r < 40) randWeapon() else if (r < 58) 4 else if (r < 82) 5 else 6
+        return if (r < 34) randWeapon() else if (r < 50) 4 else if (r < 72) 5 else if (r < 84) 6
+        else if (r < 88) 7 else if (r < 94) 8 else if (r < 98) 9 else 10
     }
 
     private fun addLoot(kind: Int, x: Float, z: Float) {
         val p = Vector3(x.coerceIn(-world.maxX, world.maxX), 1f, z.coerceIn(-world.maxZ, world.maxZ))
         collide(p, 1.2f, world.h(p.x, p.z))
         if (!world.walkable(p.x, p.z) || world.h(p.x, p.z) < 0.4f) return
-        val mag = if (kind <= 3) weapons[kind].mag else 0
+        val mag = if (isGun(kind)) weapons[kind].mag else 0
         loot.add(Loot(kind, p.x, p.z, mag, world.h(p.x, p.z)))
     }
 
     // loot lying on the floor of a building (any storey)
     private fun addLootAt(kind: Int, x: Float, y: Float, z: Float) {
-        val mag = if (kind <= 3) weapons[kind].mag else 0
+        val mag = if (isGun(kind)) weapons[kind].mag else 0
         loot.add(Loot(kind, x, z, mag, y))
     }
 
@@ -854,6 +905,11 @@ class BattleGame : ApplicationAdapter() {
             val z = b.z + (rnd.nextFloat() - 0.5f) * b.hd * 2f
             addLoot(randKind(), x, z)
         }
+        // heavy weapons and backpacks of every level lying around the map
+        for (i in 0 until 40) {
+            addLoot(if (i < 6) 7 else if (i < 22) 8 else if (i < 34) 9 else 10,
+                (rnd.nextFloat() - 0.5f) * (world.MW - 100f), (rnd.nextFloat() - 0.5f) * (world.MH - 100f))
+        }
         // extra guns lying around in the open
         for (i in 0 until 14) {
             addLoot(if (i < 8) randWeapon() else randKind(),
@@ -864,6 +920,7 @@ class BattleGame : ApplicationAdapter() {
     private fun onBotDeath(b: Bot) {
         addLoot(b.weapon, b.pos.x, b.pos.z)
         addLoot(5, b.pos.x + 1.5f, b.pos.z)
+        if (rnd.nextInt(100) < 14) addLoot(8 + rnd.nextInt(2), b.pos.x - 1.5f, b.pos.z)
     }
 
     // bot dies: drop loot and leave a body that falls over
@@ -879,12 +936,13 @@ class BattleGame : ApplicationAdapter() {
     private fun applyItem(l: Loot): Boolean {
         when (l.kind) {
             4 -> {
-                if (medkits >= 5) return false
+                if (medkits >= medCap()) return false
                 medkits++
                 msg = "Medkit +1 (tap the + button)"
             }
             5 -> {
-                reserve = minOf(300, reserve + 40)
+                if (reserve >= ammoCap()) return false
+                reserve = minOf(ammoCap(), reserve + 40)
                 msg = "Ammo +40"
             }
             6 -> {
@@ -898,13 +956,36 @@ class BattleGame : ApplicationAdapter() {
         return true
     }
 
-    private fun pickupWeapon(l: Loot) {
-        // same weapon already carried -> just take ammo
-        if (slots[0].type == l.kind || slots[1].type == l.kind) {
-            reserve = minOf(300, reserve + 30)
+    private fun pickupPack(l: Loot) {
+        val lv = l.kind - 7
+        if (lv > bpLevel) {
+            if (bpLevel > 0) loot.add(Loot(7 + bpLevel, l.x + 1.3f, l.z, 0, l.y))
+            bpLevel = lv
             loot.remove(l)
-            msg = "Ammo +30"
-            msgT = 1.5f
+            msg = "Level $lv backpack: ammo ${ammoCap()}, medkits ${medCap()}"
+        } else msg = "You already carry a level $bpLevel backpack"
+        msgT = 2f
+    }
+
+    private fun pickupWeapon(l: Loot) {
+        if (l.kind >= 8) { pickupPack(l); return }
+        if (l.kind == 7) {
+            // the minigun has its own box; a second one swaps and the old one falls to the ground
+            val s = slots[2]
+            if (s.type < 0) {
+                s.type = 7
+                s.mag = l.mag
+                loot.remove(l)
+                msg = "Equipped MINIGUN"
+            } else {
+                val om = s.mag
+                s.mag = l.mag
+                l.mag = om
+                msg = "Swapped MINIGUN - the old one fell on the ground"
+            }
+            cur = 2
+            reloading = false
+            msgT = 1.8f
             return
         }
         val empty = if (slots[0].type < 0) 0 else if (slots[1].type < 0) 1 else -1
@@ -914,14 +995,16 @@ class BattleGame : ApplicationAdapter() {
             cur = empty
             loot.remove(l)
         } else {
-            // swap the current weapon with the one on the ground
-            val s = slots[cur]
+            // both gun boxes full: swap the gun in your hands (or box 1) with the one on the ground
+            val i = if (cur <= 1) cur else 0
+            val s = slots[i]
             val oldType = s.type
             val oldMag = s.mag
             s.type = l.kind
             s.mag = l.mag
             l.kind = oldType
             l.mag = oldMag
+            cur = i
         }
         reloading = false
         msg = "Equipped " + weapons[slots[cur].type].name
@@ -957,6 +1040,12 @@ class BattleGame : ApplicationAdapter() {
                 shapes.rect(cx - 10f, cy - 36f, 14f, 32f)
                 shapes.rect(cx - 25f, cy + 8f, 40f, 7f)
             }
+            7 -> {
+                shapes.rect(cx - 40f, cy - 8f, 70f, 22f)
+                for (k in 0..2) shapes.rect(cx + 30f, cy - 6f + k * 7f, 60f, 4f)
+                shapes.rect(cx - 8f, cy - 36f, 14f, 30f)
+                shapes.rect(cx - 30f, cy + 14f, 40f, 8f)
+            }
             3 -> {
                 shapes.rect(cx - 70f, cy - 4f, 140f, 12f)
                 shapes.rect(cx + 70f, cy - 1f, 32f, 5f)
@@ -968,12 +1057,15 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun swapWeapon() {
-        val o = 1 - cur
-        if (slots[o].type >= 0) {
-            cur = o
-            reloading = false
-            msg = weapons[slots[cur].type].name
-            msgT = 1.2f
+        for (d in 1..2) {
+            val o = (cur + d) % 3
+            if (slots[o].type >= 0) {
+                cur = o
+                reloading = false
+                msg = weapons[slots[cur].type].name
+                msgT = 1.2f
+                break
+            }
         }
     }
 
@@ -1165,6 +1257,9 @@ class BattleGame : ApplicationAdapter() {
         slots[0].mag = weapons[0].mag
         slots[1].type = -1
         slots[1].mag = 0
+        slots[2].type = -1
+        slots[2].mag = 0
+        bpLevel = 0
         cur = 0
         cam.position.set(0f, 1.7f, 0f)
         collide(cam.position, 0.6f)
@@ -1447,6 +1542,9 @@ class BattleGame : ApplicationAdapter() {
         val fireX = w * 0.88f
         val fireY = h * 0.72f
         val fireR = h * 0.12f
+        val fire2X = w * 0.085f
+        val fire2Y = h * 0.52f
+        val fire2R = h * 0.075f
         val reloadX = w * 0.74f
         val reloadY = h * 0.82f
         val reloadR = h * 0.075f
@@ -1476,7 +1574,7 @@ class BattleGame : ApplicationAdapter() {
         val slotY = panelY + panelH + 10f
         fun slotX(i: Int): Float = panelX + i * (slotW + 10f)
         fun slotHit(x: Float, y: Float): Int {
-            for (i in 0..1) {
+            for (i in 0..2) {
                 if (x >= slotX(i) && x <= slotX(i) + slotW && y >= slotY && y <= slotY + slotH) return i
             }
             return -1
@@ -1521,7 +1619,7 @@ class BattleGame : ApplicationAdapter() {
                 val y = Gdx.input.getY(i).toFloat()
                 val dfx = x - fireX
                 val dfy = y - fireY
-                if (dfx * dfx + dfy * dfy < fireR * fireR * 2.2f) {
+                if (dfx * dfx + dfy * dfy < fireR * fireR * 2.2f || inCircle(x, y, fire2X, fire2Y, fire2R * 1.25f)) {
                     firing = true
                 } else if (inCircle(x, y, reloadX, reloadY, reloadR * 1.15f) ||
                     inCircle(x, y, medX, medY, medR * 1.15f) ||
@@ -1607,7 +1705,7 @@ class BattleGame : ApplicationAdapter() {
                 val ldx = l.x - cam.position.x
                 val ldz = l.z - cam.position.z
                 val ld = sqrt(ldx * ldx + ldz * ldz)
-                if (l.kind >= 4) {
+                if (l.kind in 4..6) {
                     if (dropState == 3 && ld < 2.2f && abs(l.y - (cam.position.y - eyeH)) < 2.2f && applyItem(l)) loot.removeAt(li)
                 } else if (dropState == 3 && ld < nearD && abs(l.y - (cam.position.y - eyeH)) < 2.2f) {
                     near = l
@@ -1959,15 +2057,15 @@ class BattleGame : ApplicationAdapter() {
             drawVehicle(vh, vehMatrix(vh, vTmp))
         }
         val dvh = driving
-        if (dvh != null && dvh.type != 0 && pa != null && humansOk) {
+        if (dvh != null && pa != null && humansOk && tpp) {
             val bm = vehMatrix(dvh, Matrix4())
-            if (dvh.type != 0) {
-                play(pa, "Drive", 1f)
-                pa.ctrl.update(dt)
-                when (dvh.type) { 2 -> pa.inst.transform.set(bm).translate(0f, 0.12f, -0.18f); 3 -> pa.inst.transform.set(bm).translate(0f, 0.12f, -0.12f); else -> pa.inst.transform.set(bm).translate(0f, 0.19f, 0.07f) }
-                batch.render(pa.inst, env)
-                carry(pa, slots[cur].type, slots[1 - cur].type, false, false)
-            }
+            val clip = when (dvh.type) { 0 -> "DriveCar"; 1 -> "RideRetro"; 2 -> "RideMoto"; else -> "RideMtb" }
+            val pedal = if (dvh.type == 1 || dvh.type == 3) (abs(dvh.v) / 3.2f).coerceIn(0f, 3f) else 1f
+            play(pa, clip, pedal)
+            pa.ctrl.update(dt)
+            pa.inst.transform.set(bm)
+            batch.render(pa.inst, env)
+            carry(pa, slots[cur].type, otherType(), false, false, bpLevel)
         }
         if (showBody && pa != null) {
             val moving = pMoving
@@ -1982,7 +2080,7 @@ class BattleGame : ApplicationAdapter() {
             else if (dropState == 3 && stance == 1) play(pa, if (moving) "CrouchWalk" else "Crouch", if (moving) (pSpeed / 2f).coerceIn(0.6f, 1.5f) else 1f)
             else locoAnim(pa, if (moving) pSpeed else 0f, armedNow)
             pa.ctrl.update(dt)
-            drawActor(pa, eyeP.x, eyeP.y - (if (dropState == 3) eyeH else 1.7f), eyeP.z, pYaw, slots[cur].type, slots[1 - cur].type, armedNow && hp > 0f, flash > 0f)
+            drawActor(pa, eyeP.x, eyeP.y - (if (dropState == 3) eyeH else 1.7f), eyeP.z, pYaw, slots[cur].type, otherType(), armedNow && hp > 0f, flash > 0f, bpLevel)
         }
         for (b in bots) {
             val bdx = b.pos.x - cam.position.x
@@ -2026,9 +2124,15 @@ class BattleGame : ApplicationAdapter() {
             val lb = Matrix4()
             lb.translate(l.x, lgh + 0.95f + 0.12f * sin(gameTime * 2f + l.x), l.z)
             lb.rotate(Vector3.Y, gameTime * 80f)
-            if (l.kind <= 3) {
+            if (isGun(l.kind)) {
                 lb.scale(1.5f, 1.5f, 1.5f)
                 drawProp(weaponProps[l.kind], lb)
+            } else if (l.kind >= 8) {
+                val pi = bpInst[l.kind - 8]
+                if (pi != null) {
+                    pi.transform.set(lb).scale(2.2f, 2.2f, 2.2f).translate(0f, 0f, 0.12f)
+                    batch.render(pi, env)
+                }
             } else {
                 lb.scale(1.2f, 1.2f, 1.2f)
                 drawProp(itemProps[l.kind - 4], lb)
@@ -2095,6 +2199,10 @@ class BattleGame : ApplicationAdapter() {
         shapes.circle(fireX, h - fireY, fireR * 0.55f)
         shapes.setColor(0.9f, 0.15f, 0.15f, if (firing) 1f else 0.9f)
         shapes.circle(fireX, h - fireY, fireR * 0.42f)
+        shapes.setColor(0.1f, 0.1f, 0.12f, 0.55f)
+        shapes.circle(fire2X, h - fire2Y, fire2R)
+        shapes.setColor(0.9f, 0.15f, 0.15f, if (firing) 1f else 0.85f)
+        shapes.circle(fire2X, h - fire2Y, fire2R * 0.6f)
 
         // round buttons
         shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
@@ -2169,8 +2277,8 @@ class BattleGame : ApplicationAdapter() {
         shapes.scale(1.25f, 1.25f, 1f)
         gunIcon(slot.type, 0f, 0f)
         shapes.identity()
-        // two small weapon boxes
-        for (i in 0..1) {
+        // three small weapon boxes (2 guns + 1 heavy)
+        for (i in 0..2) {
             val bx = slotX(i)
             val by = h - slotY - slotH
             if (i == cur && slots[i].type >= 0) shapes.setColor(0.85f, 0.12f, 0.18f, 0.85f)
@@ -2343,22 +2451,24 @@ class BattleGame : ApplicationAdapter() {
         font.draw(sb, if (reloading) "Reload" else def.name, panelX + 22f, h - panelY - 90f)
         // small weapon boxes
         font.data.setScale(1.4f)
-        for (i in 0..1) {
+        for (i in 0..2) {
             val bx = slotX(i)
             val by = h - slotY - slotH
             if (slots[i].type >= 0) {
                 label(weapons[slots[i].type].name, bx + slotW / 2f, by + slotH - 16f)
                 label("${slots[i].mag}", bx + slotW / 2f, by + 16f)
             } else {
-                label("EMPTY", bx + slotW / 2f, by + slotH / 2f)
+                label(if (i == 2) "HEAVY" else "EMPTY", bx + slotW / 2f, by + slotH / 2f)
             }
         }
         label("x$medkits", medX + 38f, h - medY + 40f)
+        font.data.setScale(1.3f)
+        font.draw(sb, "BAG LV$bpLevel   AMMO $reserve/${ammoCap()}   MEDKIT $medkits/${medCap()}", w / 2f - 190f, 118f)
 
         if (dropState < 3) centered("ALTITUDE ${(if (dropState == 0) planeY else cam.position.y - world.h(cam.position.x, cam.position.z)).toInt()} m", h * 0.28f, w)
         if (dropState == 0) centered("Still in cabin: ${bots.size + 1}", h * 0.22f, w)
         if (msgT > 0f) centered(msg, h * 0.64f, w)
-        if (nl != null) centered("Weapon: " + weapons[nl.kind].name + " - tap PICK", h * 0.34f, w)
+        if (nl != null) centered(lootName(nl.kind) + " - tap PICK", h * 0.34f, w)
 
         font.data.setScale(1.8f)
         label("RELOAD", reloadX, h - reloadY)
@@ -2543,7 +2653,7 @@ class BattleGame : ApplicationAdapter() {
         font.data.setScale(1.8f)
         centered("REALM OF ALMARAKAH   -   pinch or drag to zoom", my0 + mh + 46f, w)
         font.data.setScale(1.0f)
-        centered("Credits (Sketchfab): Porsche 911 Carrera 4S by Karol Miklas, CC-BY-SA 4.0 | Retro bike by annzep, CC-BY 4.0 | PUBG Green Parachute by Skin-Tracker, CC-BY 4.0 | Sports Bike by Futurealiti, CC-BY 4.0 | Bike by T-FLEX CAD ST, CC-BY 4.0", 26f, w)
+        centered("Credits (Sketchfab): Porsche 911 Carrera 4S by Karol Miklas, CC-BY-SA 4.0 | Retro bike by annzep, CC-BY 4.0 | PUBG Green Parachute by Skin-Tracker, CC-BY 4.0 | Sports Bike by Futurealiti, CC-BY 4.0 | Bike by T-FLEX CAD ST, CC-BY 4.0 | Backpacks by Thomas Lean, Bart (CC-BY 4.0) and kam (Hiking Backpack, CC-BY-SA 4.0)", 26f, w)
         font.data.setScale(3f)
         sb.end()
     }

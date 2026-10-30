@@ -729,6 +729,7 @@ class TerrainWorld {
             builders[k] = nb
             return nb
         }
+        loadTreeModel()
         val rnd = Random(4242)
         val inp = DataInputStream(BufferedInputStream(Gdx.files.internal("map_obj.bin").read(), 1 shl 16))
         val nTrees = inp.readInt()
@@ -795,7 +796,68 @@ class TerrainWorld {
         emit(ibuilders, intChunks)
     }
 
+    // low-poly tree model (tree.bin): per triangle 9 floats (x,y,z of 3 corners) + packed rgba
+    private var treeTpl: FloatArray? = null
+    private var treeCol: IntArray? = null
+    private fun loadTreeModel() {
+        try {
+            val inp = DataInputStream(BufferedInputStream(Gdx.files.internal("tree.bin").read(), 1 shl 14))
+            val n = inp.readInt()
+            val tp = FloatArray(n * 9)
+            val tc = IntArray(n)
+            for (t in 0 until n) {
+                for (k in 0 until 9) tp[t * 9 + k] = inp.readFloat()
+                tc[t] = inp.readInt()
+            }
+            inp.close()
+            treeTpl = tp
+            treeCol = tc
+        } catch (e: Throwable) {
+            treeTpl = null
+        }
+    }
+
+    private fun addTreeModel(b: VegBuilder, x: Float, y: Float, z: Float, type: Int, s: Float, r: Random): Boolean {
+        val tp = treeTpl ?: return false
+        val tc = treeCol ?: return false
+        val v = 0.85f + r.nextFloat() * 0.3f
+        val ang = r.nextFloat() * 6.2831855f
+        val ca = cos(ang)
+        val sa = sin(ang)
+        val k = (when (type) { 0, 1 -> 4.0f; 2 -> 3.2f; else -> 3.6f }) * s * (0.9f + r.nextFloat() * 0.2f)
+        val snow = type == 1
+        val dry = type == 2 && r.nextInt(8) == 0
+        for (t in 0 until tc.size) {
+            val o = t * 9
+            val c = tc[t]
+            var cr = ((c ushr 24) and 255) / 255f
+            var cg = ((c ushr 16) and 255) / 255f
+            var cbl = ((c ushr 8) and 255) / 255f
+            val leaf = cg > cr
+            if (leaf) {
+                if (snow) { cr = 0.72f; cg = 0.84f; cbl = 0.78f }
+                else if (dry) { cr = 0.70f; cg = 0.45f; cbl = 0.12f }
+                else if (type == 0 || type == 3) { cr *= 0.65f; cg *= 0.85f; cbl *= 0.7f }
+            }
+            val col = cb(cr * v, cg * v, cbl * v)
+            val px = FloatArray(3)
+            val py = FloatArray(3)
+            val pz = FloatArray(3)
+            for (q in 0 until 3) {
+                val lx = tp[o + q * 3]
+                val ly = tp[o + q * 3 + 1]
+                val lz = tp[o + q * 3 + 2]
+                px[q] = x + (lx * ca - lz * sa) * k
+                py[q] = y + ly * k
+                pz[q] = z + (lx * sa + lz * ca) * k
+            }
+            b.tri(px[0], py[0], pz[0], px[1], py[1], pz[1], px[2], py[2], pz[2], col)
+        }
+        return true
+    }
+
     private fun addTree(b: VegBuilder, x: Float, y: Float, z: Float, type: Int, s: Float, r: Random) {
+        if (type in 0..3 && addTreeModel(b, x, y, z, type, s, r)) return
         val v = 0.85f + r.nextFloat() * 0.3f
         val ph = r.nextFloat() * 6.28f
         val trunk = cb(0.36f * v, 0.25f * v, 0.15f * v)
