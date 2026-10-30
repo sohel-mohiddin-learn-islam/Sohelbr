@@ -204,13 +204,13 @@ class BattleGame : ApplicationAdapter() {
     private var bikeInst: ModelInstance? = null
     private var sbikeInst: ModelInstance? = null
     private var mtbInst: ModelInstance? = null
-    private class WDef(val file: String, val x: Float, val y: Float, val z: Float, val r: Float, val steer: Boolean)
+    private class WheelDef(val file: String, val x: Float, val y: Float, val z: Float, val r: Float, val steer: Boolean)
     private val wheelDefs = arrayOf(
-        arrayOf(WDef("car_w0.vmesh", -0.718f, 0.295f, 1.113f, 0.295f, true), WDef("car_w1.vmesh", 0.674f, 0.295f, 1.18f, 0.295f, true),
-                WDef("car_w2.vmesh", -0.685f, 0.295f, -1.05f, 0.295f, false), WDef("car_w3.vmesh", 0.658f, 0.295f, -1.05f, 0.295f, false)),
-        arrayOf(WDef("bike_w0.vmesh", -0.034f, 0.362f, -0.566f, 0.362f, false), WDef("bike_w1.vmesh", -0.013f, 0.364f, 0.606f, 0.362f, true)),
-        arrayOf(WDef("sbike_w0.vmesh", 0.024f, 0.297f, 0.755f, 0.297f, true), WDef("sbike_w1.vmesh", -0.003f, 0.317f, -0.718f, 0.317f, false)),
-        arrayOf(WDef("bike2_w0.vmesh", 0.002f, 0.352f, 0.544f, 0.352f, true), WDef("bike2_w1.vmesh", -0.001f, 0.364f, -0.533f, 0.352f, false)))
+        arrayOf(WheelDef("car_w0.vmesh", -0.718f, 0.295f, 1.113f, 0.295f, true), WheelDef("car_w1.vmesh", 0.674f, 0.295f, 1.18f, 0.295f, true),
+                WheelDef("car_w2.vmesh", -0.685f, 0.295f, -1.05f, 0.295f, false), WheelDef("car_w3.vmesh", 0.658f, 0.295f, -1.05f, 0.295f, false)),
+        arrayOf(WheelDef("bike_w0.vmesh", -0.034f, 0.362f, -0.566f, 0.362f, false), WheelDef("bike_w1.vmesh", -0.013f, 0.364f, 0.606f, 0.362f, true)),
+        arrayOf(WheelDef("sbike_w0.vmesh", 0.024f, 0.297f, 0.755f, 0.297f, true), WheelDef("sbike_w1.vmesh", -0.003f, 0.317f, -0.718f, 0.317f, false)),
+        arrayOf(WheelDef("bike2_w0.vmesh", 0.002f, 0.352f, 0.544f, 0.352f, true), WheelDef("bike2_w1.vmesh", -0.001f, 0.364f, -0.533f, 0.352f, false)))
     private val wheelInst = arrayOfNulls<Array<ModelInstance?>>(4)
     private val vTmp = Matrix4()
     private val wTmp = Matrix4()
