@@ -1544,7 +1544,7 @@ class BattleGame : ApplicationAdapter() {
 
     // feet = height of the feet, so furniture and walls of other storeys are ignored
     private var ghostWalls = false
-    private val vcTmp = FloatArray(8)
+    private val vcTmp = FloatArray(9)
 
     // solid vehicle bodies as chains of circles: returns the number of circles (x,z,r triples in vcTmp)
     private fun vehCircles(vh: Vehicle): Int {
