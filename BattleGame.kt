@@ -138,7 +138,7 @@ class BattleGame : ApplicationAdapter() {
     private val tpProps = ArrayList<Prop>()      // guns without the first-person arms
     private val meta = arrayOfNulls<ActorMeta>(2)
     private val botModels = arrayOfNulls<Model>(2)
-    private val holdScale = floatArrayOf(1.0f, 0.9f, 0.85f, 0.75f, 1f, 1f, 1f, 0.7f).copyOf(36)
+    private val holdScale = floatArrayOf(1.0f, 0.9f, 0.85f, 0.75f, 1f, 1f, 1f, 0.7f).copyOf(40)
     private var pActor: Actor? = null
     private var pArmedT = 0f
     // plane drop: 0 = in the plane, 1 = free fall, 2 = parachute, 3 = on the ground
@@ -167,8 +167,8 @@ class BattleGame : ApplicationAdapter() {
     private var planeInst: ModelInstance? = null
     private var tpLen = 3.2f
     // grip point (in gun space) and distance between the two hands for each gun
-    private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f, 0f, 0f, 0f, -0.12f).copyOf(36)
-    private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f, 0f, 0f, 0f, 0.12f).copyOf(36)
+    private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f, 0f, 0f, 0f, -0.12f).copyOf(40)
+    private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f, 0f, 0f, 0f, 0.12f).copyOf(40)
     private val holdD = floatArrayOf(0.18f, 0.33f, 0.48f, 0.50f, 0f, 0f, 0f, 0.45f)
     private val itemProps = ArrayList<Prop>()
     private val beams = ArrayList<ModelInstance>()
@@ -187,7 +187,7 @@ class BattleGame : ApplicationAdapter() {
     private val slots = arrayOf(Slot(0, 12), Slot(-1, 0), Slot(-1, 0))
     private var bpLevel = 0
     private val bpInst = arrayOfNulls<ModelInstance>(3)
-    private fun isGun(k: Int) = k in 0..3 || k == 7 || k in 11..35
+    private fun isGun(k: Int) = k in 0..3 || k == 7 || k in 11..37
     private fun gunCat(t: Int): Int = if (t >= 11) weapons[t].cat else if (t == 0) 0 else if (t == 1) 1 else if (t == 3) 3 else 2
     private fun ammoCap() = intArrayOf(90, 150, 220, 300)[bpLevel]
     private fun medCap() = intArrayOf(2, 3, 4, 6)[bpLevel]
@@ -657,7 +657,9 @@ class BattleGame : ApplicationAdapter() {
             // machine pistols (cat 4)
             GS("G18C", 4, 14f, 0.055f, 33, 1.5f, 120f, true, 0.95f, gc(0.1f, 0.1f, 0.1f), gc(1f, 0.3f, 0.1f), 0),
             GS("VZ.61", 4, 11f, 0.07f, 20, 1.4f, 110f, true, 1.0f, gc(0.3f, 0.3f, 0.32f), gc(0.8f, 0.8f, 0.8f), 0),
-            GS("MAC-10", 4, 13f, 0.048f, 30, 1.5f, 100f, true, 0.85f, gc(0.22f, 0.22f, 0.24f), gc(0.6f, 0.6f, 0.6f), 0)
+            GS("MAC-10", 4, 13f, 0.048f, 30, 1.5f, 100f, true, 0.85f, gc(0.22f, 0.22f, 0.24f), gc(0.6f, 0.6f, 0.6f), 0),
+            GS("DESERT EAGLE", 0, 52f, 0.4f, 7, 1.6f, 150f, false, 1.25f, gc(0.7f, 0.7f, 0.72f), gc(0.2f, 0.2f, 0.2f), 0),
+            GS("M500", 0, 85f, 0.75f, 5, 2.4f, 170f, false, 1.5f, gc(0.6f, 0.6f, 0.62f), gc(0.15f, 0.15f, 0.15f), WD)
         )
     }
 
@@ -1060,7 +1062,7 @@ class BattleGame : ApplicationAdapter() {
         // the 25 real-world guns: pistols 11-15, SMGs 16-20, rifles 21-27, snipers 28-32, machine pistols 33-35
         val c = rnd.nextInt(100)
         return if (c < 22) 11 + rnd.nextInt(5) else if (c < 50) 16 + rnd.nextInt(5) else if (c < 80) 21 + rnd.nextInt(7)
-        else if (c < 88) 28 + rnd.nextInt(5) else 33 + rnd.nextInt(3)
+        else if (c < 86) 28 + rnd.nextInt(5) else if (c < 93) 33 + rnd.nextInt(3) else 36 + rnd.nextInt(2)
     }
 
     private fun randKind(): Int {
@@ -1169,18 +1171,35 @@ class BattleGame : ApplicationAdapter() {
                 s.mag = l.mag
                 loot.remove(l)
                 msg = "Equipped MINIGUN"
-            } else {
+            } else if (s.type == 7) {
                 val om = s.mag
                 s.mag = l.mag
                 l.mag = om
                 msg = "Swapped MINIGUN - the old one fell on the ground"
+            } else {
+                // a normal gun sits in box 3: move it to a free box or drop it
+                val fr = if (slots[0].type < 0) 0 else if (slots[1].type < 0) 1 else -1
+                if (fr >= 0) {
+                    slots[fr].type = s.type
+                    slots[fr].mag = s.mag
+                    loot.remove(l)
+                    msg = "Equipped MINIGUN"
+                } else {
+                    val ot = s.type
+                    val om = s.mag
+                    l.kind = ot
+                    l.mag = om
+                    msg = "Equipped MINIGUN - your " + weapons[ot].name + " fell on the ground"
+                }
+                s.type = 7
+                s.mag = weapons[7].mag
             }
             cur = 2
             reloading = false
             msgT = 1.8f
             return
         }
-        val empty = if (slots[0].type < 0) 0 else if (slots[1].type < 0) 1 else -1
+        val empty = if (slots[0].type < 0) 0 else if (slots[1].type < 0) 1 else if (slots[2].type < 0) 2 else -1
         if (empty >= 0) {
             slots[empty].type = l.kind
             slots[empty].mag = l.mag
@@ -1188,7 +1207,7 @@ class BattleGame : ApplicationAdapter() {
             loot.remove(l)
         } else {
             // both gun boxes full: swap the gun in your hands (or box 1) with the one on the ground
-            val i = if (cur <= 1) cur else 0
+            val i = if (slots[cur].type == 7) 0 else cur
             val s = slots[i]
             val oldType = s.type
             val oldMag = s.mag
@@ -1644,6 +1663,8 @@ class BattleGame : ApplicationAdapter() {
         if (vh.wrecked) return
         vh.hp -= d
         hitMark = 0.15f
+        msg = "VEHICLE HP " + vh.hp.coerceAtLeast(0f).toInt()
+        msgT = 0.8f
         if (vh.hp <= 0f) explodeVehicle(vh)
     }
 
@@ -2818,7 +2839,7 @@ class BattleGame : ApplicationAdapter() {
                 label(weapons[slots[i].type].name, bx + slotW / 2f, by + slotH - 16f)
                 label("${slots[i].mag}", bx + slotW / 2f, by + 16f)
             } else {
-                label(if (i == 2) "HEAVY" else "EMPTY", bx + slotW / 2f, by + slotH / 2f)
+                label("EMPTY", bx + slotW / 2f, by + slotH / 2f)
             }
         }
         label("x$medkits", medX + 38f, h - medY + 40f)
@@ -3044,7 +3065,7 @@ class Vehicle(val type: Int, var x: Float, var z: Float, var yaw: Float) {
     var pitch = 0f
     var dist = 0f
     var steer = 0f
-    var hp = when (type) { 0 -> 450f; 2 -> 220f; else -> 140f }
+    var hp = when (type) { 0 -> 300f; 2 -> 150f; else -> 90f }
     var wrecked = false
     var wreckT = 0f
 }
