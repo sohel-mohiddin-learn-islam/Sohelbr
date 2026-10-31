@@ -88,6 +88,7 @@ class WDef(
     val cat: Int = -1
 )
 class Slot(var type: Int, var mag: Int)
+class Grenade(val pos: Vector3, val vel: Vector3, var fuse: Float)
 class Loot(var kind: Int, var x: Float, var z: Float, var mag: Int, var y: Float = 0f)
 
 class BattleGame : ApplicationAdapter() {
@@ -204,6 +205,10 @@ class BattleGame : ApplicationAdapter() {
     private var recoil = 0f
     private var firingLast = false
     private var hitMark = 0f
+    private val grenades = ArrayList<Grenade>()
+    private val blasts = ArrayList<FloatArray>()   // x,y,z,time left
+    private var grenadeCount = 3
+    private lateinit var grenInst: ModelInstance
     private var hitHead = false
     private var gameTime = 0f
     private var walkT = 0f
@@ -908,6 +913,11 @@ class BattleGame : ApplicationAdapter() {
             mkGlow(p, 0.03f, 0.22f, 0.02f, Color(1f, 0.8f, 0.2f, 1f), 0f, 0f, -0.01f)
             flashProp = Prop(p)
         }
+        run {
+            val gm = mb.createBox(0.2f, 0.26f, 0.2f, Material(ColorAttribute.createDiffuse(Color(0.2f, 0.35f, 0.15f, 1f))), attrs)
+            models.add(gm)
+            grenInst = ModelInstance(gm)
+        }
     }
 
     private fun buildItems() {
@@ -1137,7 +1147,8 @@ class BattleGame : ApplicationAdapter() {
             5 -> {
                 if (reserve >= ammoCap()) return false
                 reserve = minOf(ammoCap(), reserve + 40)
-                msg = "Ammo +40"
+                if (grenadeCount < 6) grenadeCount++
+                msg = "Ammo +40 (+1 grenade)"
             }
             6 -> {
                 if (armor >= 100f) return false
@@ -1306,14 +1317,20 @@ class BattleGame : ApplicationAdapter() {
         val l = vehHalf(vh)
         val hf = world.h(vh.x + fwd.x * l, vh.z + fwd.z * l)
         val hb = world.h(vh.x - fwd.x * l, vh.z - fwd.z * l)
-        val ty = (hf + hb) / 2f
+        val rx = -fwd.z
+        val rz = fwd.x
+        val sw = if (vh.type == 0) 0.9f else 0.3f
+        val hc = world.h(vh.x, vh.z)
+        val hl = world.h(vh.x + rx * sw, vh.z + rz * sw)
+        val hr = world.h(vh.x - rx * sw, vh.z - rz * sw)
+        val ty = maxOf(maxOf((hf + hb) / 2f, hc), maxOf(hl, hr))
         val tp = atan2(hf - hb, 2f * l) * 57.29578f
         if (snap) {
             vh.y = ty
             vh.pitch = tp
         } else {
-            val k = minOf(1f, dt * 10f)
-            vh.y += (ty - vh.y) * k
+            val k = minOf(1f, dt * 14f)
+            if (ty > vh.y) vh.y = ty else vh.y += (ty - vh.y) * k
             vh.pitch += (tp - vh.pitch) * k
         }
     }
@@ -1436,6 +1453,9 @@ class BattleGame : ApplicationAdapter() {
     // Game state
     // ------------------------------------------------------------------
     private fun restart() {
+        grenades.clear()
+        blasts.clear()
+        grenadeCount = 3
         hp = 200f
         armor = 0f
         kills = 0
@@ -1945,6 +1965,9 @@ class BattleGame : ApplicationAdapter() {
         val medX = panelX - 75f
         val medY = 100f
         val medR = 55f
+        val grX = medX - 130f
+        val grY = medY
+        val grR = 50f
         val runX = w * 0.21f
         val runY = h * 0.40f
         val runR = h * 0.07f
@@ -1985,7 +2008,7 @@ class BattleGame : ApplicationAdapter() {
                 if (dfx * dfx + dfy * dfy < fireR * fireR * 2.2f || inCircle(x, y, fire2X, fire2Y, fire2R * 1.25f)) {
                     firing = true
                 } else if (inCircle(x, y, reloadX, reloadY, reloadR * 1.15f) ||
-                    inCircle(x, y, medX, medY, medR * 1.15f) ||
+                    inCircle(x, y, medX, medY, medR * 1.15f) || inCircle(x, y, grX, grY, grR * 1.15f) ||
                     inCircle(x, y, runX, runY, runR * 1.15f) ||
                     inCircle(x, y, jumpX, jumpY, jumpR * 1.15f) ||
                     inCircle(x, y, crouchX, crouchY, crouchR * 1.15f) || inCircle(x, y, proneX, proneY, proneR * 1.15f) ||
@@ -2117,6 +2140,18 @@ class BattleGame : ApplicationAdapter() {
                     if (driving != null) exitVehicle() else if (nvv != null) enterVehicle(nvv)
                 } else if (inCircle(tx, ty, reloadX, reloadY, reloadR * 1.15f)) {
                     tryReload()
+                } else if (inCircle(tx, ty, grX, grY, grR * 1.15f)) {
+                    if (grenadeCount > 0 && hp > 0f && dropState == 3 && driving == null) {
+                        grenadeCount--
+                        val gd = Vector3(cam.direction).nor()
+                        if (tpp) {
+                            val tp = tpCamPos(cam.position)
+                            gd.set(tp.add(Vector3(cam.direction).nor().scl(80f)).sub(cam.position)).nor()
+                        }
+                        val gp = Vector3(cam.position).add(Vector3(gd).scl(0.7f))
+                        val gv = Vector3(gd).scl(17f).add(0f, 4.5f, 0f)
+                        grenades.add(Grenade(gp, gv, 2.6f))
+                    }
                 } else if (inCircle(tx, ty, medX, medY, medR * 1.15f)) {
                     if (medkits > 0 && hp < 200f) {
                         medkits--
@@ -2375,6 +2410,63 @@ class BattleGame : ApplicationAdapter() {
         }
         if (damaged) hurtFlash = 0.15f else hurtFlash -= dt
 
+        // grenades
+        val gi = grenades.iterator()
+        while (gi.hasNext()) {
+            val g = gi.next()
+            g.fuse -= dt
+            g.vel.y -= 18f * dt
+            g.pos.x += g.vel.x * dt
+            g.pos.y += g.vel.y * dt
+            g.pos.z += g.vel.z * dt
+            val gg = world.groundY(g.pos.x, g.pos.z, g.pos.y + 0.3f)
+            if (g.pos.y < gg + 0.13f) {
+                g.pos.y = gg + 0.13f
+                g.vel.y = -g.vel.y * 0.35f
+                if (abs(g.vel.y) < 1.2f) g.vel.y = 0f
+                g.vel.x *= 0.7f
+                g.vel.z *= 0.7f
+            }
+            val ox = g.pos.x
+            val oz = g.pos.z
+            collide(g.pos, 0.15f, g.pos.y - 0.1f)
+            if (abs(g.pos.x - ox) + abs(g.pos.z - oz) > 0.001f) {
+                g.vel.x *= -0.3f
+                g.vel.z *= -0.3f
+            }
+            if (g.fuse <= 0f) {
+                gi.remove()
+                blasts.add(floatArrayOf(g.pos.x, g.pos.y, g.pos.z, 0.35f))
+                val br = 9f
+                for (b in bots) {
+                    if (b.hp <= 0f) continue
+                    val dx = b.pos.x - g.pos.x
+                    val dz = b.pos.z - g.pos.z
+                    val dy = b.pos.y + 1f - g.pos.y
+                    val d = sqrt(dx * dx + dz * dz + dy * dy)
+                    if (d < br) {
+                        val f = 1f - d / br
+                        val l = sqrt(dx * dx + dz * dz) + 0.01f
+                        knockBot(b, 220f * f, dx / l * 2.5f * f, dz / l * 2.5f * f)
+                    }
+                }
+                for (vh in ArrayList(vehicles)) {
+                    val d = sqrt((vh.x - g.pos.x) * (vh.x - g.pos.x) + (vh.z - g.pos.z) * (vh.z - g.pos.z))
+                    if (d < br) damageVehicle(vh, 260f * (1f - d / br))
+                }
+                val pdx = cam.position.x - g.pos.x
+                val pdz = cam.position.z - g.pos.z
+                val pdd = sqrt(pdx * pdx + pdz * pdz + (cam.position.y - g.pos.y) * (cam.position.y - g.pos.y))
+                if (pdd < br) { hurt(110f * (1f - pdd / br)); hurtFlash = 0.3f }
+            }
+        }
+        val bi2 = blasts.iterator()
+        while (bi2.hasNext()) {
+            val bl = bi2.next()
+            bl[3] -= dt
+            if (bl[3] <= 0f) bi2.remove()
+        }
+
         // zone walls
         val zr = zoneR.coerceAtLeast(0.5f)
         zoneInst.transform.setToTranslation(zoneCx, 75f, zoneCz).scale(zr, 1f, zr)
@@ -2428,6 +2520,16 @@ class BattleGame : ApplicationAdapter() {
                 canopy.transform.setToTranslation(eyeP.x, eyeP.y + 3.4f, eyeP.z)
                 batch.render(canopy, env)
             }
+        }
+        for (g in grenades) {
+            grenInst.transform.setToTranslation(g.pos.x, g.pos.y, g.pos.z)
+            batch.render(grenInst, env)
+        }
+        for (bl in blasts) {
+            val sc = 3f + (0.35f - bl[3]) * 20f
+            val bm = Matrix4().setToTranslation(bl[0], bl[1] + 0.5f, bl[2]).scale(sc, sc, sc)
+            drawProp(flashProp, bm)
+            drawProp(flashProp, Matrix4(bm).rotate(Vector3.Y, 90f))
         }
         for (vh in vehicles) {
             val vdx = vh.x - cam.position.x
@@ -2603,6 +2705,11 @@ class BattleGame : ApplicationAdapter() {
         shapes.circle(runX, h - runY, runR)
         shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
         shapes.circle(medX, h - medY, medR)
+        shapes.circle(grX, h - grY, grR)
+        if (grenadeCount > 0) shapes.setColor(0.5f, 0.85f, 0.3f, 1f) else shapes.setColor(0.7f, 0.7f, 0.7f, 0.7f)
+        shapes.rect(grX - 14f, h - grY - 18f, 28f, 34f)
+        shapes.rect(grX - 6f, h - grY + 16f, 12f, 9f)
+        shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
         if (medkits > 0 && hp < 200f) shapes.setColor(1f, 0.35f, 0.4f, 1f) else shapes.setColor(0.7f, 0.7f, 0.7f, 0.7f)
         shapes.rect(medX - 24f, h - medY - 7f, 48f, 14f)
         shapes.rect(medX - 7f, h - medY - 24f, 14f, 48f)
@@ -2843,6 +2950,7 @@ class BattleGame : ApplicationAdapter() {
             }
         }
         label("x$medkits", medX + 38f, h - medY + 40f)
+        label("x$grenadeCount", grX + 34f, h - grY + 36f)
         font.data.setScale(1.3f)
         font.draw(sb, "BAG LV$bpLevel   AMMO $reserve/${ammoCap()}   MEDKIT $medkits/${medCap()}", w / 2f - 190f, 118f)
 

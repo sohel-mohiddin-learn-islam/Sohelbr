@@ -198,6 +198,7 @@ class TerrainWorld {
     private var rh = 376
     val houses = ArrayList<FloatArray>()   // x, z, hw, hd, floor y of every house you can walk into
     val interiors = ArrayList<Interior>()
+    private val roofGrid = HashMap<Int, ArrayList<FloatArray>>()   // x0,z0,x1,z1,top of every roof you can stand on
     private val intGrid = HashMap<Int, ArrayList<Interior>>()
     val lootSpots = ArrayList<FloatArray>()  // x, floor y, z : free floor spots inside buildings
     private val bdata = ArrayList<BData>()
@@ -467,6 +468,11 @@ class TerrainWorld {
     /** height of the floor you would stand on at (x,z); feet = current feet height (picks the right storey) */
     fun groundY(x: Float, z: Float, feet: Float): Float {
         var best = h(x, z)
+        val rl = roofGrid[((z - Z0) / 32f).toInt().coerceAtLeast(0) * 1024 + ((x - X0) / 32f).toInt().coerceAtLeast(0)]
+        if (rl != null) for (rf in rl) {
+            if (x < rf[0] || x > rf[2] || z < rf[1] || z > rf[3]) continue
+            if (rf[4] <= feet + 0.85f && rf[4] > best) best = rf[4]
+        }
         if (interiors.isEmpty()) return best
         val lst = intGrid[((z - Z0) / 32f).toInt().coerceAtLeast(0) * 1024 + ((x - X0) / 32f).toInt().coerceAtLeast(0)] ?: return best
         for (iv in lst) {
@@ -1002,6 +1008,15 @@ class TerrainWorld {
         val z1 = z + hd
         val y1 = y0 + hh
         val hollow = bd.door in 1..4
+        run {
+            val top = y1 + (if (roof == 0) 0.4f else if (roof == 3) 0.02f else 0.25f)
+            val rf = floatArrayOf(x0, z0, x1, z1, top)
+            val ci0 = ((x0 - X0) / 32f).toInt().coerceAtLeast(0)
+            val ci1 = ((x1 - X0) / 32f).toInt().coerceAtLeast(0)
+            val cj0 = ((z0 - Z0) / 32f).toInt().coerceAtLeast(0)
+            val cj1 = ((z1 - Z0) / 32f).toInt().coerceAtLeast(0)
+            for (cj in cj0..cj1) for (ci in ci0..ci1) roofGrid.getOrPut(cj * 1024 + ci) { ArrayList() }.add(rf)
+        }
         val base = if (hollow) bd.f else y0 + 0.6f
         val mask = bd.mask
         val dS = hollow && (mask and 1) != 0   // door in the +z wall
