@@ -48,7 +48,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-class Bot(val gender: Int, val outfit: Int, val pos: Vector3, var hp: Float = 100f) {
+class Bot(val gender: Int, val outfit: Int, val pos: Vector3, var hp: Float = 200f) {
     val target = Vector3()
     var retarget = 0f
     var yaw = 0f
@@ -63,6 +63,8 @@ class Bot(val gender: Int, val outfit: Int, val pos: Vector3, var hp: Float = 10
     var deadT = 0f
     var rival: Bot? = null
     var scanT = 0f
+    var downT = 0f
+    var vehCd = 0f
 }
 
 class Actor(val inst: ModelInstance, val ctrl: AnimationController, val g: Int) {
@@ -82,7 +84,8 @@ class Part(val inst: ModelInstance, val ox: Float, val oy: Float, val oz: Float,
 class Prop(val parts: ArrayList<Part>)
 class WDef(
     val name: String, val dmg: Float, val cd: Float, val mag: Int, val reload: Float,
-    val range: Float, val auto: Boolean, val viewScale: Float, val muzzleY: Float, val muzzleZ: Float
+    val range: Float, val auto: Boolean, val viewScale: Float, val muzzleY: Float, val muzzleZ: Float,
+    val cat: Int = -1
 )
 class Slot(var type: Int, var mag: Int)
 class Loot(var kind: Int, var x: Float, var z: Float, var mag: Int, var y: Float = 0f)
@@ -135,7 +138,7 @@ class BattleGame : ApplicationAdapter() {
     private val tpProps = ArrayList<Prop>()      // guns without the first-person arms
     private val meta = arrayOfNulls<ActorMeta>(2)
     private val botModels = arrayOfNulls<Model>(2)
-    private val holdScale = floatArrayOf(1.0f, 0.9f, 0.85f, 0.75f, 1f, 1f, 1f, 0.7f)
+    private val holdScale = floatArrayOf(1.0f, 0.9f, 0.85f, 0.75f, 1f, 1f, 1f, 0.7f).copyOf(36)
     private var pActor: Actor? = null
     private var pArmedT = 0f
     // plane drop: 0 = in the plane, 1 = free fall, 2 = parachute, 3 = on the ground
@@ -164,8 +167,8 @@ class BattleGame : ApplicationAdapter() {
     private var planeInst: ModelInstance? = null
     private var tpLen = 3.2f
     // grip point (in gun space) and distance between the two hands for each gun
-    private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f, 0f, 0f, 0f, -0.12f)
-    private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f, 0f, 0f, 0f, 0.12f)
+    private val gripY = floatArrayOf(-0.055f, -0.09f, -0.10f, -0.10f, 0f, 0f, 0f, -0.12f).copyOf(36)
+    private val gripZ = floatArrayOf(0.045f, 0.09f, 0.08f, 0.14f, 0f, 0f, 0f, 0.12f).copyOf(36)
     private val holdD = floatArrayOf(0.18f, 0.33f, 0.48f, 0.50f, 0f, 0f, 0f, 0.45f)
     private val itemProps = ArrayList<Prop>()
     private val beams = ArrayList<ModelInstance>()
@@ -184,14 +187,15 @@ class BattleGame : ApplicationAdapter() {
     private val slots = arrayOf(Slot(0, 12), Slot(-1, 0), Slot(-1, 0))
     private var bpLevel = 0
     private val bpInst = arrayOfNulls<ModelInstance>(3)
-    private fun isGun(k: Int) = k in 0..3 || k == 7
+    private fun isGun(k: Int) = k in 0..3 || k == 7 || k in 11..35
+    private fun gunCat(t: Int): Int = if (t >= 11) weapons[t].cat else if (t == 0) 0 else if (t == 1) 1 else if (t == 3) 3 else 2
     private fun ammoCap() = intArrayOf(90, 150, 220, 300)[bpLevel]
     private fun medCap() = intArrayOf(2, 3, 4, 6)[bpLevel]
     private fun otherType(): Int {
         for (d in 1..2) { val i = (cur + d) % 3; if (slots[i].type >= 0) return slots[i].type }
         return -1
     }
-    private fun lootName(k: Int): String = if (isGun(k)) weapons[k].name else if (k >= 8) "BACKPACK LV" + (k - 7) else "ITEM"
+    private fun lootName(k: Int): String = if (isGun(k)) weapons[k].name else if (k in 8..10) "BACKPACK LV" + (k - 7) else "ITEM"
     private var cur = 0
     private var reserve = 36
     private var armor = 0f
@@ -228,6 +232,8 @@ class BattleGame : ApplicationAdapter() {
         out.setToTranslation(vh.x, vh.y, vh.z).rotate(Vector3.Y, vh.yaw + 180f).rotate(Vector3.X, -vh.pitch)
     private fun drawVehicle(vh: Vehicle, m: Matrix4) {
         val inst = vehInst(vh.type) ?: return
+        val tv = if (vh.wrecked) 0.16f else 0.9f
+        tint(inst, tv)
         inst.transform.set(m)
         batch.render(inst, env)
         val ws = wheelInst[vh.type] ?: return
@@ -238,8 +244,15 @@ class BattleGame : ApplicationAdapter() {
             wTmp.set(m).translate(d.x, d.y, d.z)
             if (d.steer) wTmp.rotate(Vector3.Y, vh.steer)
             wTmp.rotate(Vector3.X, vh.dist / d.r * 57.29578f)
+            tint(wi, tv)
             wi.transform.set(wTmp)
             batch.render(wi, env)
+        }
+    }
+    private fun tint(inst: ModelInstance, v: Float) {
+        for (mt in inst.materials) {
+            val ca = mt.get(ColorAttribute.Diffuse) as? ColorAttribute
+            if (ca != null) ca.color.set(v, v, v, 1f)
         }
     }
     private fun vehInst(t: Int): ModelInstance? = when (t) { 0 -> carInst; 1 -> bikeInst; 2 -> sbikeInst; else -> mtbInst }
@@ -289,7 +302,7 @@ class BattleGame : ApplicationAdapter() {
 
     private var yaw = 0f
     private var pitch = 0f
-    private var hp = 100f
+    private var hp = 200f
     private var kills = 0
     private var cooldown = 0f
     private var flash = 0f
@@ -560,13 +573,13 @@ class BattleGame : ApplicationAdapter() {
 
     private fun slung(base: Matrix4, B: Vector3, type: Int, slot: Int) {
         val bm = Matrix4(base)
-        if (type == 0) {
+        if (gunCat(type) == 0 || gunCat(type) == 4) {
             // pistol in a holster on the hip
             bm.translate(B.x - 0.22f + 0.44f * slot, B.y - 0.62f, B.z + 0.16f).rotate(Vector3.Y, 180f).scale(1.1f, 1.1f, 1.1f)
         } else {
             // rifle strap over the back: barrel up over the shoulder, side of the gun against the back
             val tilt = if (slot == 0) 10f else -10f
-            val sc = if (type == 7) 0.5f else if (type == 3) 0.7f else 0.8f
+            val sc = if (type == 7) 0.5f else if (gunCat(type) == 3) 0.7f else 0.8f
             bm.translate(B.x + (if (slot == 0) -0.03f else 0.03f), B.y - 0.12f, B.z - 0.04f - 0.05f * slot)
             bm.rotate(Vector3.Z, tilt).rotate(Vector3.X, 80f).rotate(Vector3.Z, 90f)
             bm.scale(sc, sc, sc).translate(0f, 0f, 0.2f)
@@ -603,6 +616,172 @@ class BattleGame : ApplicationAdapter() {
         mk(p, 0.085f, 0.085f, 0.12f, skin, 0f, hy, hz)
         mk(p, 0.085f, 0.085f, 0.60f, sleeve, -0.10f, hy - 0.12f, hz + 0.26f, -20f, 22f)
     }
+
+    // ------------------------------------------------------------------
+    // 25 real-world guns (kinds 11..35), built from boxes by category
+    // ------------------------------------------------------------------
+    private class GS(val name: String, val cat: Int, val dmg: Float, val cd: Float, val mag: Int, val reload: Float,
+                     val range: Float, val auto: Boolean, val len: Float, val body: Color, val acc: Color, val fl: Int)
+
+    private fun gc(r: Float, g: Float, b: Float) = Color(r, g, b, 1f)
+
+    private fun gunSpecs(): List<GS> {
+        val SC = 1; val BP = 2; val CH = 4; val DR = 8; val NS = 16; val BI = 32; val SU = 64; val WD = 128; val CV = 256; val BR = 512
+        return listOf(
+            // pistols (cat 0)
+            GS("USP", 0, 24f, 0.27f, 15, 1.3f, 140f, false, 1.05f, gc(0.2f, 0.2f, 0.22f), gc(0.8f, 0.8f, 0.85f), 0),
+            GS("GLOCK 19", 0, 20f, 0.24f, 15, 1.2f, 130f, false, 0.95f, gc(0.12f, 0.12f, 0.12f), gc(1f, 0.3f, 0.1f), 0),
+            GS("P320", 0, 21f, 0.25f, 17, 1.25f, 135f, false, 1.0f, gc(0.55f, 0.45f, 0.3f), gc(0.2f, 0.2f, 0.2f), 0),
+            GS("M92FS", 0, 22f, 0.27f, 15, 1.3f, 140f, false, 1.1f, gc(0.18f, 0.18f, 0.2f), gc(0.75f, 0.75f, 0.7f), 0),
+            GS("M1911", 0, 34f, 0.35f, 7, 1.4f, 120f, false, 1.0f, gc(0.25f, 0.25f, 0.25f), gc(0.85f, 0.75f, 0.4f), WD),
+            // submachine guns (cat 1)
+            GS("MP5", 1, 15f, 0.075f, 30, 1.6f, 170f, true, 1.0f, gc(0.12f, 0.12f, 0.13f), gc(0.5f, 0.5f, 0.55f), 0),
+            GS("P90", 1, 14f, 0.065f, 50, 2.0f, 190f, true, 1.0f, gc(0.2f, 0.22f, 0.2f), gc(1f, 0.6f, 0.1f), BP or NS),
+            GS("VECTOR", 1, 17f, 0.055f, 25, 1.5f, 150f, true, 0.9f, gc(0.15f, 0.15f, 0.17f), gc(0.2f, 0.9f, 0.4f), SC or NS),
+            GS("SCORPION", 1, 15f, 0.08f, 30, 1.6f, 160f, true, 1.0f, gc(0.1f, 0.1f, 0.1f), gc(0.9f, 0.9f, 0.9f), 0),
+            GS("MP7", 1, 13f, 0.07f, 40, 1.7f, 190f, true, 0.9f, gc(0.25f, 0.27f, 0.22f), gc(0.3f, 0.3f, 0.3f), SC or SU),
+            // assault rifles (cat 2)
+            GS("M4A1", 2, 24f, 0.09f, 30, 2.0f, 280f, true, 1.0f, gc(0.15f, 0.15f, 0.15f), gc(0.5f, 0.5f, 0.55f), SC),
+            GS("AK-47", 2, 30f, 0.1f, 30, 2.1f, 250f, true, 1.0f, gc(0.2f, 0.18f, 0.15f), gc(0.5f, 0.3f, 0.1f), WD or CV),
+            GS("SCAR-L", 2, 25f, 0.095f, 30, 2.0f, 290f, true, 1.05f, gc(0.55f, 0.45f, 0.3f), gc(0.2f, 0.2f, 0.2f), SC),
+            GS("HK416", 2, 25f, 0.09f, 30, 2.0f, 300f, true, 1.05f, gc(0.12f, 0.12f, 0.12f), gc(0.3f, 0.6f, 1f), SC),
+            GS("FAMAS", 2, 22f, 0.067f, 25, 2.2f, 250f, true, 0.9f, gc(0.25f, 0.3f, 0.2f), gc(0.6f, 0.6f, 0.6f), BP or CH),
+            GS("AUG A3", 2, 23f, 0.09f, 30, 2.0f, 280f, true, 0.9f, gc(0.2f, 0.3f, 0.15f), gc(0.2f, 0.2f, 0.2f), BP or SC),
+            GS("QBZ-95", 2, 24f, 0.092f, 30, 2.1f, 260f, true, 0.9f, gc(0.3f, 0.3f, 0.25f), gc(0.2f, 0.2f, 0.2f), BP or CH),
+            // sniper rifles (cat 3)
+            GS("AWM", 3, 120f, 1.5f, 5, 3.0f, 650f, false, 1.1f, gc(0.2f, 0.25f, 0.15f), gc(0.9f, 0.8f, 0.2f), SC or BI),
+            GS("BARRETT", 3, 115f, 0.9f, 10, 3.2f, 700f, false, 1.1f, gc(0.15f, 0.15f, 0.15f), gc(0.8f, 0.2f, 0.2f), SC or DR or BR or BI),
+            GS("M200", 3, 125f, 1.4f, 7, 3.0f, 750f, false, 1.2f, gc(0.25f, 0.2f, 0.15f), gc(0.9f, 0.8f, 0.2f), SC or BI),
+            GS("SVD", 3, 75f, 0.5f, 10, 2.5f, 500f, false, 1.0f, gc(0.3f, 0.22f, 0.12f), gc(0.5f, 0.3f, 0.1f), SC or WD or DR),
+            GS("R700", 3, 100f, 1.2f, 5, 2.8f, 550f, false, 1.0f, gc(0.15f, 0.15f, 0.15f), gc(0.8f, 0.8f, 0.8f), SC or WD),
+            // machine pistols (cat 4)
+            GS("G18C", 4, 14f, 0.055f, 33, 1.5f, 120f, true, 0.95f, gc(0.1f, 0.1f, 0.1f), gc(1f, 0.3f, 0.1f), 0),
+            GS("VZ.61", 4, 11f, 0.07f, 20, 1.4f, 110f, true, 1.0f, gc(0.3f, 0.3f, 0.32f), gc(0.8f, 0.8f, 0.8f), 0),
+            GS("MAC-10", 4, 13f, 0.048f, 30, 1.5f, 100f, true, 0.85f, gc(0.22f, 0.22f, 0.24f), gc(0.6f, 0.6f, 0.6f), 0)
+        )
+    }
+
+    private fun addGun(sp: GS) {
+        val k = weapons.size
+        val p = ArrayList<Part>()
+        val F = { f: Int -> (sp.fl and f) != 0 }
+        val furn = if (F(128)) wood else black
+        var muzzle = 0f
+        var my = 0.005f
+        when (sp.cat) {
+            0, 4 -> {
+                val sl = 0.26f * sp.len
+                val front = -0.06f - sl / 2f
+                mk(p, 0.05f, 0.04f, sl - 0.02f, dark, 0f, 0f, -0.05f)
+                mk(p, 0.055f, 0.06f, sl, sp.body, 0f, 0.04f, -0.06f)
+                mk(p, 0.058f, 0.012f, sl, sp.acc, 0f, 0.076f, -0.06f)
+                mk(p, 0.025f, 0.025f, 0.05f, black, 0f, 0.04f, front - 0.015f)
+                mk(p, 0.05f, 0.14f, 0.07f, if (F(128)) wood else black, 0f, -0.08f, 0.04f)
+                mk(p, 0.04f, 0.02f, 0.07f, dark, 0f, -0.04f, -0.03f)
+                mk(p, 0.015f, 0.02f, 0.015f, black, 0f, 0.088f, front + 0.02f)
+                mk(p, 0.025f, 0.02f, 0.015f, black, 0f, 0.088f, 0.06f)
+                muzzle = front - 0.04f
+                my = 0.04f
+                if (sp.cat == 4) {
+                    mk(p, 0.04f, 0.18f, 0.05f, dark, 0f, -0.21f, 0.045f)
+                    mk(p, 0.04f, 0.04f, 0.08f, black, 0f, 0.0f, front - 0.04f)
+                }
+                addRightArm(p, -0.075f, 0.045f)
+            }
+            1 -> {
+                val bl = 0.32f * sp.len
+                val front = -0.02f - bl / 2f
+                val bl2 = if (F(64)) 0.22f else 0.10f
+                mk(p, 0.07f, 0.10f, bl, sp.body, 0f, 0f, -0.02f)
+                mk(p, 0.075f, 0.012f, bl + 0.01f, sp.acc, 0f, 0.056f, -0.02f)
+                mk(p, 0.05f, 0.06f, 0.16f, gray, 0f, 0.005f, front - 0.08f)
+                mk(p, 0.022f, 0.022f, bl2, black, 0f, 0.005f, front - 0.16f - bl2 / 2f)
+                if (F(2)) mk(p, 0.06f, 0.035f, bl * 0.9f, dark, 0f, 0.075f, -0.04f)
+                else {
+                    mk(p, 0.04f, 0.26f, 0.06f, dark, 0f, -0.17f, -0.04f)
+                    mk(p, 0.03f, 0.035f, 0.10f, black, 0f, 0.075f, -0.04f)
+                }
+                mk(p, 0.05f, 0.13f, 0.06f, black, 0f, -0.11f, 0.09f)
+                if (!F(16)) {
+                    mk(p, 0.035f, 0.05f, 0.18f, gray, 0f, 0.005f, 0.24f)
+                    mk(p, 0.05f, 0.10f, 0.03f, black, 0f, -0.01f, 0.34f)
+                }
+                if (F(1)) mk(p, 0.04f, 0.05f, 0.10f, black, 0f, 0.10f, -0.04f)
+                muzzle = front - 0.16f - bl2 - 0.01f
+                addRightArm(p, -0.11f, 0.09f)
+                addLeftArm(p, -0.07f, front - 0.06f)
+            }
+            2 -> {
+                val rl = 0.45f * sp.len
+                val front = -0.05f - rl / 2f
+                val bl2 = if (F(64)) 0.34f else 0.22f
+                mk(p, 0.07f, 0.10f, rl, sp.body, 0f, 0f, -0.05f)
+                mk(p, 0.075f, 0.012f, rl + 0.01f, sp.acc, 0f, 0.056f, -0.05f)
+                mk(p, 0.065f, 0.07f, 0.30f, if (F(128)) wood else gray, 0f, -0.005f, front - 0.125f)
+                mk(p, 0.025f, 0.025f, bl2, black, 0f, 0.005f, front - 0.25f - bl2 / 2f)
+                mk(p, 0.03f, 0.03f, 0.05f, black, 0f, 0.005f, front - 0.25f - bl2 - 0.02f)
+                mk(p, 0.014f, 0.045f, 0.014f, black, 0f, 0.045f, front - 0.2f)
+                if (F(2)) {
+                    mk(p, 0.07f, 0.11f, 0.26f, sp.body, 0f, -0.005f, 0.17f)
+                    mk(p, 0.045f, 0.20f, 0.075f, dark, 0f, -0.15f, 0.02f)
+                } else {
+                    mk(p, 0.06f, 0.10f, 0.24f, furn, 0f, -0.015f, -0.05f + rl / 2f + 0.115f)
+                    if (F(256)) mk(p, 0.045f, 0.22f, 0.075f, dark, 0f, -0.15f, -0.13f, 0f, 14f)
+                    else mk(p, 0.045f, 0.20f, 0.075f, dark, 0f, -0.15f, -0.13f)
+                }
+                mk(p, 0.05f, 0.14f, 0.06f, black, 0f, -0.12f, 0.08f)
+                if (F(4)) mk(p, 0.04f, 0.05f, 0.28f, black, 0f, 0.09f, -0.05f)
+                else mk(p, 0.045f, 0.04f, 0.10f, black, 0f, 0.075f, -0.02f)
+                if (F(1)) {
+                    mk(p, 0.05f, 0.05f, 0.12f, black, 0f, 0.11f, -0.06f)
+                    mkGlow(p, 0.03f, 0.03f, 0.012f, Color(1f, 0.1f, 0.1f, 1f), 0f, 0.11f, -0.125f)
+                }
+                muzzle = front - 0.25f - bl2 - 0.045f
+                addRightArm(p, -0.12f, 0.08f)
+                addLeftArm(p, -0.085f, front - 0.125f)
+            }
+            3 -> {
+                val bar = 0.70f * sp.len
+                val tip = -0.25f - bar
+                val big = F(512)
+                mk(p, 0.07f, 0.10f, 0.50f, sp.body, 0f, 0f, 0f)
+                mk(p, 0.074f, 0.012f, 0.50f, sp.acc, 0f, 0.056f, 0f)
+                mk(p, 0.03f, 0.03f, bar, black, 0f, 0.01f, -0.25f - bar / 2f)
+                mk(p, if (big) 0.07f else 0.045f, if (big) 0.07f else 0.045f, if (big) 0.12f else 0.07f, gray, 0f, 0.01f, tip - 0.02f)
+                if (F(1)) {
+                    mk(p, 0.05f, 0.05f, 0.30f, black, 0f, 0.105f, -0.08f)
+                    mk(p, 0.07f, 0.07f, 0.06f, black, 0f, 0.105f, -0.25f)
+                    mk(p, 0.06f, 0.06f, 0.05f, black, 0f, 0.105f, 0.08f)
+                    mkGlow(p, 0.05f, 0.05f, 0.01f, Color(0.2f, 0.6f, 1f, 1f), 0f, 0.105f, -0.285f)
+                    mk(p, 0.03f, 0.04f, 0.03f, gray, 0f, 0.065f, -0.14f)
+                    mk(p, 0.03f, 0.04f, 0.03f, gray, 0f, 0.065f, 0.02f)
+                }
+                if (F(32)) {
+                    mk(p, 0.02f, 0.14f, 0.02f, gray, 0.06f, -0.08f, tip + 0.25f, 0f, 20f)
+                    mk(p, 0.02f, 0.14f, 0.02f, gray, -0.06f, -0.08f, tip + 0.25f, 0f, 20f)
+                }
+                mk(p, 0.06f, 0.13f, 0.32f, furn, 0f, -0.02f, 0.40f)
+                mk(p, 0.05f, 0.04f, 0.14f, furn, 0f, 0.06f, 0.33f)
+                mk(p, 0.05f, 0.13f, 0.06f, black, 0f, -0.12f, 0.14f)
+                if (F(8)) mk(p, 0.045f, 0.20f, 0.08f, dark, 0f, -0.15f, -0.10f)
+                else mk(p, 0.04f, 0.10f, 0.07f, dark, 0f, -0.10f, -0.10f)
+                muzzle = tip - 0.04f - (if (big) 0.06f else 0f)
+                my = 0.01f
+                addRightArm(p, -0.12f, 0.14f)
+                addLeftArm(p, -0.045f, -0.36f)
+            }
+        }
+        // the third-person gun has no first-person arms
+        tpProps.add(Prop(ArrayList(p.subList(0, p.size - armParts(sp.cat)))))
+        weaponProps.add(Prop(p))
+        val vs = when (sp.cat) { 0 -> 1.5f; 4 -> 1.4f; 1 -> 1.1f; 2 -> 1.0f; else -> 0.8f }
+        weapons.add(WDef(sp.name, sp.dmg, sp.cd, sp.mag, sp.reload, sp.range, sp.auto, vs, my, muzzle, sp.cat))
+        holdScale[k] = when (sp.cat) { 0 -> 1.0f; 4 -> 0.95f; 1 -> 0.9f; 2 -> 0.85f; else -> 0.75f }
+        gripY[k] = when (sp.cat) { 0 -> -0.055f; 4 -> -0.055f; 1 -> -0.09f; 2 -> -0.10f; else -> -0.10f }
+        gripZ[k] = when (sp.cat) { 0 -> 0.045f; 4 -> 0.045f; 1 -> 0.09f; 2 -> 0.08f; else -> 0.14f }
+    }
+
+    private fun armParts(cat: Int): Int = when (cat) { 0 -> 2; 4 -> 2; else -> 4 }
 
     private fun buildWeapons() {
         // 0: PISTOL
@@ -712,6 +891,12 @@ class BattleGame : ApplicationAdapter() {
             weaponProps.add(Prop(p))
             weapons.add(WDef("MINIGUN", 9f, 0.055f, 150, 4.5f, 220f, true, 0.7f, 0f, -0.95f))
         }
+        for (k in 0 until 3) {
+            weapons.add(WDef("-", 0f, 1f, 1, 1f, 1f, false, 1f, 0f, 0f))
+            tpProps.add(Prop(ArrayList()))
+            weaponProps.add(Prop(ArrayList()))
+        }
+        for (sp in gunSpecs()) addGun(sp)
         // muzzle flash (drawn at the barrel tip)
         run {
             val p = ArrayList<Part>()
@@ -779,7 +964,10 @@ class BattleGame : ApplicationAdapter() {
             Color(0.3f, 0.5f, 1f, 1f),     // backpack lv2
             Color(0.85f, 0.3f, 1f, 1f)     // backpack lv3
         )
-        for (c in cols) {
+        val allCols = ArrayList<Color>()
+        for (c in cols) allCols.add(c)
+        for (sp in gunSpecs()) allCols.add(when (sp.cat) { 0, 4 -> cols[0]; 1 -> cols[1]; 2 -> cols[2]; else -> cols[3] })
+        for (c in allCols) {
             val m = mb.createBox(0.14f, 9f, 0.14f,
                 Material(ColorAttribute.createDiffuse(c), ColorAttribute.createEmissive(c), BlendingAttribute(0.35f)),
                 attrs)
@@ -868,7 +1056,11 @@ class BattleGame : ApplicationAdapter() {
     // ------------------------------------------------------------------
     private fun randWeapon(): Int {
         val r = rnd.nextInt(100)
-        return if (r < 30) 0 else if (r < 60) 1 else if (r < 88) 2 else 3
+        if (r < 40) return if (r < 12) 0 else if (r < 24) 1 else if (r < 36) 2 else 3
+        // the 25 real-world guns: pistols 11-15, SMGs 16-20, rifles 21-27, snipers 28-32, machine pistols 33-35
+        val c = rnd.nextInt(100)
+        return if (c < 22) 11 + rnd.nextInt(5) else if (c < 50) 16 + rnd.nextInt(5) else if (c < 80) 21 + rnd.nextInt(7)
+        else if (c < 88) 28 + rnd.nextInt(5) else 33 + rnd.nextInt(3)
     }
 
     private fun randKind(): Int {
@@ -968,7 +1160,7 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun pickupWeapon(l: Loot) {
-        if (l.kind >= 8) { pickupPack(l); return }
+        if (l.kind in 8..10) { pickupPack(l); return }
         if (l.kind == 7) {
             // the minigun has its own box; a second one swaps and the old one falls to the ground
             val s = slots[2]
@@ -1022,7 +1214,8 @@ class BattleGame : ApplicationAdapter() {
 
     // simple flat gun silhouette for the weapon boxes
     private fun gunIcon(type: Int, cx: Float, cy: Float) {
-        when (type) {
+        val ic = if (type >= 11) (when (weapons[type].cat) { 0, 4 -> 0; 1 -> 1; 2 -> 2; else -> 3 }) else type
+        when (ic) {
             0 -> {
                 shapes.rect(cx - 24f, cy - 4f, 48f, 15f)
                 shapes.rect(cx - 8f, cy - 30f, 16f, 28f)
@@ -1200,6 +1393,7 @@ class BattleGame : ApplicationAdapter() {
             vh.x = p.x
             vh.z = p.z
         }
+        vehicleHits(vh)
         vh.dist += vh.v * dt
         vh.steer += (-mx * 28f * (if (vh.v >= 0f) 1f else -1f) - vh.steer) * minOf(1f, dt * 8f)
         placeVehicle(vh, false, dt)
@@ -1223,7 +1417,7 @@ class BattleGame : ApplicationAdapter() {
     // Game state
     // ------------------------------------------------------------------
     private fun restart() {
-        hp = 100f
+        hp = 200f
         armor = 0f
         kills = 0
         yaw = 0f
@@ -1330,9 +1524,157 @@ class BattleGame : ApplicationAdapter() {
     }
 
     // feet = height of the feet, so furniture and walls of other storeys are ignored
+    private var ghostWalls = false
+    private val vcTmp = FloatArray(8)
+
+    // solid vehicle bodies as chains of circles: returns the number of circles (x,z,r triples in vcTmp)
+    private fun vehCircles(vh: Vehicle): Int {
+        val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, vh.yaw)
+        if (vh.type == 0) {
+            for (k in 0..2) {
+                vcTmp[k * 3] = vh.x + fwd.x * (k - 1) * 1.2f
+                vcTmp[k * 3 + 1] = vh.z + fwd.z * (k - 1) * 1.2f
+                vcTmp[k * 3 + 2] = 1.0f
+            }
+            return 3
+        }
+        for (k in 0..1) {
+            vcTmp[k * 3] = vh.x + fwd.x * (k - 0.5f) * 1.0f
+            vcTmp[k * 3 + 1] = vh.z + fwd.z * (k - 0.5f) * 1.0f
+            vcTmp[k * 3 + 2] = 0.5f
+        }
+        return 2
+    }
+
+    private fun collideVehicles(p: Vector3, rad: Float, feet: Float) {
+        for (vh in vehicles) {
+            if (vh === driving) continue
+            if (feet > vh.y + (if (vh.type == 0) 1.5f else 1.1f)) continue
+            val ddx = vh.x - p.x
+            val ddz = vh.z - p.z
+            if (ddx * ddx + ddz * ddz > 25f) continue
+            val n = vehCircles(vh)
+            for (k in 0 until n) {
+                val cx = vcTmp[k * 3]
+                val cz = vcTmp[k * 3 + 1]
+                val rr = vcTmp[k * 3 + 2] + rad
+                val dx = p.x - cx
+                val dz = p.z - cz
+                val d2 = dx * dx + dz * dz
+                if (d2 < rr * rr) {
+                    if (d2 > 0.00001f) {
+                        val d = sqrt(d2)
+                        p.x += dx / d * (rr - d)
+                        p.z += dz / d * (rr - d)
+                    } else p.x += rr
+                }
+            }
+        }
+    }
+
+    // nearest vehicle hit by the ray (distance in vdHit)
+    private var vdHit = 0f
+    private fun vehRay(ray: Ray, maxD: Float): Vehicle? {
+        var best: Vehicle? = null
+        var bd = maxD
+        val c = Vector3()
+        for (vh in vehicles) {
+            if (vh === driving) continue
+            val ddx = vh.x - ray.origin.x
+            val ddz = vh.z - ray.origin.z
+            if (ddx * ddx + ddz * ddz > (maxD + 4f) * (maxD + 4f)) continue
+            val n = vehCircles(vh)
+            for (k in 0 until n) {
+                c.set(vcTmp[k * 3], vh.y + 0.75f, vcTmp[k * 3 + 1])
+                if (Intersector.intersectRaySphere(ray, c, vcTmp[k * 3 + 2] + 0.15f, null)) {
+                    val d = c.dst(ray.origin)
+                    if (d < bd) { bd = d; best = vh }
+                }
+            }
+        }
+        vdHit = bd
+        return best
+    }
+
+    private fun knockBot(b: Bot, dmg: Float, dx: Float, dz: Float) {
+        b.hp -= dmg
+        b.vehCd = 0.5f
+        if (b.hp <= 0f) {
+            if (!pendingKill.contains(b)) {
+                pendingKill.add(b)
+                kills++
+            }
+            return
+        }
+        if (b.downT <= 0f) {
+            val ba = b.actor
+            if (ba != null) play(ba, "Death", 1f, 1, 0.1f)
+        }
+        b.downT = 3f
+        b.shooting = false
+        b.pos.x += dx
+        b.pos.z += dz
+    }
+
+    private fun explodeVehicle(vh: Vehicle) {
+        vh.wrecked = true
+        vh.hp = 0f
+        vh.v = 0f
+        msg = "Vehicle destroyed!"
+        msgT = 1.5f
+        val R2 = 7f
+        for (b in bots) {
+            if (b.hp <= 0f) continue
+            val dx = b.pos.x - vh.x
+            val dz = b.pos.z - vh.z
+            val d = sqrt(dx * dx + dz * dz)
+            if (d < R2) {
+                val f = 1f - d / R2
+                val l = d + 0.01f
+                knockBot(b, 150f * f, dx / l * 2f * f, dz / l * 2f * f)
+            }
+        }
+        val pdx = cam.position.x - vh.x
+        val pdz = cam.position.z - vh.z
+        val pd = sqrt(pdx * pdx + pdz * pdz)
+        if (pd < R2) { hurt(120f * (1f - pd / R2)); hurtFlash = 0.3f }
+    }
+
+    private fun damageVehicle(vh: Vehicle, d: Float) {
+        if (vh.wrecked) return
+        vh.hp -= d
+        hitMark = 0.15f
+        if (vh.hp <= 0f) explodeVehicle(vh)
+    }
+
+    // run over enemies
+    private fun vehicleHits(vh: Vehicle) {
+        val sp = abs(vh.v)
+        if (sp < 3f || vh.wrecked) return
+        val fwd = Vector3(0f, 0f, -1f).rotate(Vector3.Y, vh.yaw)
+        val dir = if (vh.v >= 0f) 1f else -1f
+        val n = vehCircles(vh)
+        for (b in bots) {
+            if (b.hp <= 0f || b.vehCd > 0f) continue
+            if (b.pos.y > vh.y + 1.4f) continue
+            for (k in 0 until n) {
+                val dx = b.pos.x - vcTmp[k * 3]
+                val dz = b.pos.z - vcTmp[k * 3 + 1]
+                val rr = vcTmp[k * 3 + 2] + 0.9f
+                if (dx * dx + dz * dz < rr * rr) {
+                    val per = when (vh.type) { 0 -> 9f; 2 -> 6f; else -> 3.5f }
+                    knockBot(b, sp * per, fwd.x * dir * 1.6f, fwd.z * dir * 1.6f)
+                    hitMark = 0.2f
+                    break
+                }
+            }
+        }
+    }
+
     private fun collide(p: Vector3, rad: Float, feet: Float = p.y - 1.7f) {
         world.collideCircles(p, rad)
-        for (b in nearBlocks(p.x - rad, p.z - rad, p.x + rad, p.z + rad)) {
+        collideVehicles(p, rad, feet)
+        if (!ghostWalls) for (b in nearBlocks(p.x - rad, p.z - rad, p.x + rad, p.z + rad)) {
             if (feet + 1.5f < b.y0 + 0.1f || feet > b.y0 + b.h - 0.35f) continue
             val nx = p.x.coerceIn(b.x - b.hw, b.x + b.hw)
             val nz = p.z.coerceIn(b.z - b.hd, b.z + b.hd)
@@ -1678,7 +2020,10 @@ class BattleGame : ApplicationAdapter() {
                 }
                 cam.position.x = cam.position.x.coerceIn(-world.maxX, world.maxX)
                 cam.position.z = cam.position.z.coerceIn(-world.maxZ, world.maxZ)
-                collide(cam.position, 0.6f, cam.position.y - eyeH)
+                val gfeet = cam.position.y - eyeH
+                ghostWalls = (jumpV != 0f || gfeet > ge - eyeH + 0.6f) && gfeet - world.h(cam.position.x, cam.position.z) > 1.8f
+                collide(cam.position, 0.6f, gfeet)
+                ghostWalls = false
                 }
             }
             if (planeActive) {
@@ -1718,6 +2063,7 @@ class BattleGame : ApplicationAdapter() {
             if (driving == null && dropState == 3 && stance == 0 && hp > 0f) {
                 var nd = 4.2f
                 for (vh in vehicles) {
+                    if (vh.wrecked) continue
                     val vdx = vh.x - cam.position.x
                     val vdz = vh.z - cam.position.z
                     val vd = sqrt(vdx * vdx + vdz * vdz)
@@ -1751,9 +2097,9 @@ class BattleGame : ApplicationAdapter() {
                 } else if (inCircle(tx, ty, reloadX, reloadY, reloadR * 1.15f)) {
                     tryReload()
                 } else if (inCircle(tx, ty, medX, medY, medR * 1.15f)) {
-                    if (medkits > 0 && hp < 100f) {
+                    if (medkits > 0 && hp < 200f) {
                         medkits--
-                        hp = minOf(100f, hp + 50f)
+                        hp = minOf(200f, hp + 100f)
                         msg = "Medkit used +50 HP"
                         msgT = 1.5f
                     }
@@ -1816,7 +2162,9 @@ class BattleGame : ApplicationAdapter() {
                     shootDir.set(tp.add(Vector3(cam.direction).nor().scl(80f)).sub(cam.position)).nor()
                 }
                 val ray = Ray(Vector3(cam.position), shootDir)
-                val maxD = wallDist(ray, def.range)
+                var maxD = wallDist(ray, def.range)
+                val vHitV = vehRay(ray, maxD)
+                if (vHitV != null) maxD = vdHit
                 var best: Bot? = null
                 var bestDist = maxD
                 var bestHead = false
@@ -1844,6 +2192,7 @@ class BattleGame : ApplicationAdapter() {
                         bestHead = head
                     }
                 }
+                if (best == null && vHitV != null) damageVehicle(vHitV, def.dmg)
                 if (best != null) {
                     best.hp -= if (bestHead) def.dmg * 2f else def.dmg
                     hitMark = 0.15f
@@ -1871,6 +2220,16 @@ class BattleGame : ApplicationAdapter() {
             while (it.hasNext()) {
                 val b = it.next()
                 if (b.hp <= 0f) continue
+                if (b.vehCd > 0f) b.vehCd -= dt
+                if (b.downT > 0f) {
+                    b.downT -= dt
+                    b.shooting = false
+                    b.moving = false
+                    b.vel = 0f
+                    collide(b.pos, 0.8f, b.pos.y)
+                    b.pos.y = world.groundY(b.pos.x, b.pos.z, b.pos.y)
+                    continue
+                }
                 val zdx = b.pos.x - zoneCx
                 val zdz = b.pos.z - zoneCz
                 val botOut = sqrt(zdx * zdx + zdz * zdz) > zoneR
@@ -1990,7 +2349,7 @@ class BattleGame : ApplicationAdapter() {
                 }
             }
             pendingKill.clear()
-            if (!damaged) hp = minOf(100f, hp + 1.5f * dt)
+            if (!damaged) hp = minOf(200f, hp + 1.5f * dt)
             if (bots.isEmpty()) won = true
         }
         if (damaged) hurtFlash = 0.15f else hurtFlash -= dt
@@ -2094,7 +2453,7 @@ class BattleGame : ApplicationAdapter() {
                 continue
             }
             val armed = b.armedT > 0f
-            locoAnim(ba, b.vel, armed)
+            if (b.downT <= 0f) locoAnim(ba, b.vel, armed)
             ba.ctrl.update(dt)
             drawActor(ba, b.pos.x, b.pos.y, b.pos.z, b.yaw, b.weapon, b.back, armed,
                       b.shooting && ((gameTime * 18f).toInt() + b.outfit) % 2 == 0)
@@ -2127,7 +2486,7 @@ class BattleGame : ApplicationAdapter() {
             if (isGun(l.kind)) {
                 lb.scale(1.5f, 1.5f, 1.5f)
                 drawProp(weaponProps[l.kind], lb)
-            } else if (l.kind >= 8) {
+            } else if (l.kind in 8..10) {
                 val pi = bpInst[l.kind - 8]
                 if (pi != null) {
                     pi.transform.set(lb).scale(2.2f, 2.2f, 2.2f).translate(0f, 0f, 0.12f)
@@ -2223,7 +2582,7 @@ class BattleGame : ApplicationAdapter() {
         shapes.circle(runX, h - runY, runR)
         shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
         shapes.circle(medX, h - medY, medR)
-        if (medkits > 0 && hp < 100f) shapes.setColor(1f, 0.35f, 0.4f, 1f) else shapes.setColor(0.7f, 0.7f, 0.7f, 0.7f)
+        if (medkits > 0 && hp < 200f) shapes.setColor(1f, 0.35f, 0.4f, 1f) else shapes.setColor(0.7f, 0.7f, 0.7f, 0.7f)
         shapes.rect(medX - 24f, h - medY - 7f, 48f, 14f)
         shapes.rect(medX - 7f, h - medY - 24f, 14f, 48f)
         if (nearVeh != null || driving != null) {
@@ -2254,7 +2613,7 @@ class BattleGame : ApplicationAdapter() {
         shapes.setColor(0f, 0f, 0f, 0.55f)
         shapes.rect(hbx, 40f, 520f, 26f)
         shapes.setColor(0.95f, 0.95f, 0.95f, 0.95f)
-        shapes.rect(hbx, 40f, 520f * (hp.coerceAtLeast(0f) / 100f), 26f)
+        shapes.rect(hbx, 40f, 520f * (hp.coerceAtLeast(0f) / 200f), 26f)
         shapes.setColor(0f, 0f, 0f, 0.55f)
         shapes.rect(hbx, 70f, 520f, 12f)
         shapes.setColor(0.3f, 0.6f, 1f, 0.95f)
@@ -2381,6 +2740,7 @@ class BattleGame : ApplicationAdapter() {
         }
         shapes.setColor(0.3f, 0.9f, 1f, 1f)
         for (vh in vehicles) {
+            if (vh.wrecked) continue
             val ddx = vh.x - cam.position.x
             val ddz = vh.z - cam.position.z
             if (ddx * ddx + ddz * ddz < 120f * 120f) shapes.circle(mcx + ddx * msc, mcy - ddz * msc, 3f)
@@ -2438,7 +2798,7 @@ class BattleGame : ApplicationAdapter() {
             }
         }
         font.data.setScale(1.5f)
-        font.draw(sb, "HP ${hp.coerceAtLeast(0f).toInt()}/100", w / 2f - 60f, 38f)
+        font.draw(sb, "HP ${hp.coerceAtLeast(0f).toInt()}/200", w / 2f - 60f, 38f)
 
         // weapon panel texts
         font.data.setScale(3.4f)
@@ -2684,6 +3044,9 @@ class Vehicle(val type: Int, var x: Float, var z: Float, var yaw: Float) {
     var pitch = 0f
     var dist = 0f
     var steer = 0f
+    var hp = when (type) { 0 -> 450f; 2 -> 220f; else -> 140f }
+    var wrecked = false
+    var wreckT = 0f
 }
 
 // compact mesh files made from the 3D models: positions, normals and either vertex colours or UVs

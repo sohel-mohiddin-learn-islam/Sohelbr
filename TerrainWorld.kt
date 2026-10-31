@@ -797,29 +797,32 @@ class TerrainWorld {
     }
 
     // low-poly tree model (tree.bin): per triangle 9 floats (x,y,z of 3 corners) + packed rgba
-    private var treeTpl: FloatArray? = null
-    private var treeCol: IntArray? = null
+    private val treeTpls = ArrayList<FloatArray>()
+    private val treeCols = ArrayList<IntArray>()
     private fun loadTreeModel() {
-        try {
-            val inp = DataInputStream(BufferedInputStream(Gdx.files.internal("tree.bin").read(), 1 shl 14))
-            val n = inp.readInt()
-            val tp = FloatArray(n * 9)
-            val tc = IntArray(n)
-            for (t in 0 until n) {
-                for (k in 0 until 9) tp[t * 9 + k] = inp.readFloat()
-                tc[t] = inp.readInt()
+        for (name in arrayOf("tree.bin", "tree_elm.bin", "tree_lg.bin")) {
+            try {
+                val inp = DataInputStream(BufferedInputStream(Gdx.files.internal(name).read(), 1 shl 14))
+                val n = inp.readInt()
+                val tp = FloatArray(n * 9)
+                val tc = IntArray(n)
+                for (t in 0 until n) {
+                    for (k in 0 until 9) tp[t * 9 + k] = inp.readFloat()
+                    tc[t] = inp.readInt()
+                }
+                inp.close()
+                treeTpls.add(tp)
+                treeCols.add(tc)
+            } catch (e: Throwable) {
             }
-            inp.close()
-            treeTpl = tp
-            treeCol = tc
-        } catch (e: Throwable) {
-            treeTpl = null
         }
     }
 
     private fun addTreeModel(b: VegBuilder, x: Float, y: Float, z: Float, type: Int, s: Float, r: Random): Boolean {
-        val tp = treeTpl ?: return false
-        val tc = treeCol ?: return false
+        if (treeTpls.isEmpty()) return false
+        val mi = if (type == 2 && treeTpls.size > 1) 1 + r.nextInt(treeTpls.size - 1) else r.nextInt(treeTpls.size)
+        val tp = treeTpls[mi]
+        val tc = treeCols[mi]
         val v = 0.85f + r.nextFloat() * 0.3f
         val ang = r.nextFloat() * 6.2831855f
         val ca = cos(ang)
