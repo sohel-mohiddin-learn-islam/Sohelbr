@@ -471,7 +471,18 @@ class TerrainWorld {
         val rl = roofGrid[((z - Z0) / 32f).toInt().coerceAtLeast(0) * 1024 + ((x - X0) / 32f).toInt().coerceAtLeast(0)]
         if (rl != null) for (rf in rl) {
             if (x < rf[0] || x > rf[2] || z < rf[1] || z > rf[3]) continue
-            if (rf[4] <= feet + 0.85f && rf[4] > best) best = rf[4]
+            val k = rf[5].toInt()
+            val top = when (k) {
+                0 -> rf[4] + 0.4f
+                3 -> rf[4] + 0.02f
+                1 -> {
+                    val alongX = rf[9] >= rf[10]
+                    val w = if (alongX) abs(z - rf[8]) / rf[10] else abs(x - rf[7]) / rf[9]
+                    rf[4] + rf[6] * (1f - w).coerceAtLeast(0f)
+                }
+                else -> rf[4] + rf[6] * (1f - maxOf(abs(x - rf[7]) / rf[9], abs(z - rf[8]) / rf[10])).coerceAtLeast(0f)
+            }
+            if (top <= feet + 0.85f && top > best) best = top
         }
         if (interiors.isEmpty()) return best
         val lst = intGrid[((z - Z0) / 32f).toInt().coerceAtLeast(0) * 1024 + ((x - X0) / 32f).toInt().coerceAtLeast(0)] ?: return best
@@ -1009,12 +1020,15 @@ class TerrainWorld {
         val y1 = y0 + hh
         val hollow = bd.door in 1..4
         run {
-            val top = y1 + (if (roof == 0) 0.4f else if (roof == 3) 0.02f else 0.25f)
-            val rf = floatArrayOf(x0, z0, x1, z1, top)
-            val ci0 = ((x0 - X0) / 32f).toInt().coerceAtLeast(0)
-            val ci1 = ((x1 - X0) / 32f).toInt().coerceAtLeast(0)
-            val cj0 = ((z0 - Z0) / 32f).toInt().coerceAtLeast(0)
-            val cj1 = ((z1 - Z0) / 32f).toInt().coerceAtLeast(0)
+            val kind = if (roof == 0) 0 else if (roof == 3) 3 else if (roof == 1) 1 else 2
+            val ov = if (kind == 1) 0.45f else if (kind == 2) 0.35f else 0f
+            val span = if (hw >= hd) hd else hw
+            val rh = if (kind == 1) span * 0.85f + 0.6f else maxOf(hw, hd) * 0.9f + 1.2f
+            val rf = floatArrayOf(x0 - ov, z0 - ov, x1 + ov, z1 + ov, y1, kind.toFloat(), rh, x, z, hw + ov, hd + ov)
+            val ci0 = ((x0 - ov - X0) / 32f).toInt().coerceAtLeast(0)
+            val ci1 = ((x1 + ov - X0) / 32f).toInt().coerceAtLeast(0)
+            val cj0 = ((z0 - ov - Z0) / 32f).toInt().coerceAtLeast(0)
+            val cj1 = ((z1 + ov - Z0) / 32f).toInt().coerceAtLeast(0)
             for (cj in cj0..cj1) for (ci in ci0..ci1) roofGrid.getOrPut(cj * 1024 + ci) { ArrayList() }.add(rf)
         }
         val base = if (hollow) bd.f else y0 + 0.6f

@@ -2065,7 +2065,7 @@ class BattleGame : ApplicationAdapter() {
                 cam.position.x = cam.position.x.coerceIn(-world.maxX, world.maxX)
                 cam.position.z = cam.position.z.coerceIn(-world.maxZ, world.maxZ)
                 val gfeet = cam.position.y - eyeH
-                ghostWalls = (jumpV != 0f || gfeet > ge - eyeH + 0.6f) && gfeet - world.h(cam.position.x, cam.position.z) > 1.8f
+                ghostWalls = false
                 collide(cam.position, 0.6f, gfeet)
                 ghostWalls = false
                 }
