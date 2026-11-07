@@ -301,6 +301,7 @@ class BattleGame : ApplicationAdapter() {
     private var tppBeforeDrive = true
     private var lookT = 0f
     private var chuteT = 0f
+    private var dropPitch = 0f
     private var stance = 0          // 0 standing, 1 sitting/crouched, 2 prone
     private var eyeH = 1.7f
     private var jumpV = 0f
@@ -563,8 +564,9 @@ class BattleGame : ApplicationAdapter() {
     private val vy = Vector3()
     private val vz = Vector3()
 
-    private fun drawActor(a: Actor, x: Float, y: Float, z: Float, yawDeg: Float, held: Int, back: Int, armed: Boolean, fire: Boolean, pk: Int = 0, rl: Float = -1f) {
+    private fun drawActor(a: Actor, x: Float, y: Float, z: Float, yawDeg: Float, held: Int, back: Int, armed: Boolean, fire: Boolean, pk: Int = 0, rl: Float = -1f, pitch: Float = 0f) {
         a.inst.transform.setToTranslation(x, y, z).rotate(Vector3.Y, yawDeg)
+        if (pitch != 0f) a.inst.transform.translate(0f, 0.9f, 0f).rotate(Vector3.X, pitch).translate(0f, -0.9f, 0f)
         batch.render(a.inst, env)
         carry(a, held, back, armed, fire, pk, rl)
     }
@@ -2664,7 +2666,9 @@ class BattleGame : ApplicationAdapter() {
                 val so = minOf(1f, chuteT / 0.9f)
                 val sx = 0.2f + 0.8f * so
                 val sy = 0.35f + 0.65f * so
-                pc.transform.setToTranslation(eyeP.x, eyeP.y - 0.35f, eyeP.z).rotate(Vector3.Y, yaw).scale(sx, sy, sx)
+                val bounce = 1f + 0.12f * sin(so * 3.1415927f)
+                val sway = if (so >= 1f) sin(gameTime * 1.3f) * 3f else 0f
+                pc.transform.setToTranslation(eyeP.x, eyeP.y - 0.35f, eyeP.z).rotate(Vector3.Y, yaw).rotate(Vector3.Z, sway).scale(sx * bounce, sy * bounce, sx * bounce)
                 batch.render(pc, env)
             } else {
                 canopy.transform.setToTranslation(eyeP.x, eyeP.y + 3.4f, eyeP.z)
@@ -2712,7 +2716,11 @@ class BattleGame : ApplicationAdapter() {
             else if (dropState == 3 && stance == 1) play(pa, if (moving) "CrouchWalk" else "Crouch", if (moving) (pSpeed / 2f).coerceIn(0.6f, 1.5f) else 1f)
             else locoAnim(pa, if (moving) pSpeed else 0f, armedNow)
             pa.ctrl.update(dt)
-            drawActor(pa, eyeP.x, eyeP.y - (if (dropState == 3) eyeH else 1.7f), eyeP.z, pYaw, slots[cur].type, otherType(), armedNow && hp > 0f, flash > 0f, bpLevel, if (reloading && isGun(slots[cur].type)) (1f - reloadT / weapons[slots[cur].type].reload).coerceIn(0f, 1f) else -1f)
+            // Free Fire style: belly-down skydive pose in freefall, pulled upright when the chute opens
+            val pitchTarget = if (dropState == 1) 78f else if (dropState == 2 && chuteT < 0.35f) 78f else 0f
+            dropPitch += (pitchTarget - dropPitch) * minOf(1f, dt * (if (dropState == 2) 6f else 8f))
+            if (dropState == 3 || hp <= 0f) dropPitch = 0f
+            drawActor(pa, eyeP.x, eyeP.y - (if (dropState == 3) eyeH else 1.7f), eyeP.z, pYaw, slots[cur].type, otherType(), dropState == 3 && hp > 0f, flash > 0f, bpLevel, if (reloading && isGun(slots[cur].type)) (1f - reloadT / weapons[slots[cur].type].reload).coerceIn(0f, 1f) else -1f, dropPitch)
         }
         for (b in bots) {
             val bdx = b.pos.x - cam.position.x
@@ -2816,6 +2824,26 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
 
         val nl = nearLoot
+
+        if (dropState < 3 && hp > 0f) {
+            // in the plane / freefall / parachute: hide the whole HUD, keep only the exit button and altitude
+            shapes.begin(ShapeRenderer.ShapeType.Filled)
+            shapes.setColor(0.08f, 0.09f, 0.12f, 0.6f)
+            shapes.circle(jumpX, h - jumpY, jumpR)
+            shapes.end()
+            sb.begin()
+            font.data.setScale(1.3f)
+            centered("ALTITUDE ${(if (dropState == 0) planeY else cam.position.y - world.h(cam.position.x, cam.position.z)).toInt()} m", h * 0.28f, w)
+            if (dropState == 0) centered("Still in cabin: ${bots.size + 1}", h * 0.22f, w)
+            if (msgT > 0f) centered(msg, h * 0.64f, w)
+            font.data.setScale(1.8f)
+            label(if (dropState == 0) "EJECT" else if (dropState == 1) "CHUTE" else "LAND", jumpX, h - jumpY)
+            font.data.setScale(3f)
+            sb.end()
+            Gdx.gl.glDisable(GL20.GL_BLEND)
+            Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
+            return
+        }
 
         shapes.begin(ShapeRenderer.ShapeType.Filled)
         if (outside) {
