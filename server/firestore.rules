@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'vvvv04431@gmail.com';
+    }
+
+    // Luck Royale prizes and events: the game can read them, only you can change them.
+    match /luck_items/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /events/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Bans: the game can look up ONE player id (get) but nobody can list them; only you can write.
+    match /bans/{id} {
+      allow get: if true;
+      allow list, write: if isAdmin();
+    }
+
+    // Reports: any signed-in (anonymous is fine) game client may CREATE one; only you can read / change / delete.
+    match /reports/{id} {
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['reporter', 'reported', 'reason', 'match', 'at', 'status', 'evidence'])
+        && request.resource.data.status == 'open'
+        && request.resource.data.evidence.size() < 400000
+        && request.resource.data.reason.size() < 100;
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

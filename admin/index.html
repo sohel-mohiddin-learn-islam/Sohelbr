@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sohelbr Admin</title>
+<style>
+:root{--bg:#0f1020;--card:#1a1b33;--line:#2b2d52;--tx:#eef0ff;--dim:#9aa0c8;--gold:#ffbd1a;--red:#e5484d;--green:#30a46c}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px system-ui,sans-serif}
+header{display:flex;gap:8px;align-items:center;padding:12px 16px;background:var(--card);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+header h1{font-size:18px;margin:0 12px 0 0;color:var(--gold)}
+nav button{background:none;border:1px solid var(--line);color:var(--tx);padding:8px 14px;border-radius:8px;cursor:pointer}
+nav button.on{background:var(--gold);color:#000;border-color:var(--gold)}
+main{padding:16px;max-width:1000px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+input,select,textarea{background:#0c0d1c;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:8px;width:100%}
+label{display:block;font-size:12px;color:var(--dim);margin:8px 0 3px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+button.b{background:var(--green);color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;margin:8px 6px 0 0}
+button.r{background:var(--red)}button.g{background:#44476e}
+table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.tag{padding:2px 8px;border-radius:99px;font-size:12px;background:#33365f}.on{color:var(--green)}.off{color:var(--red)}
+canvas{width:100%;background:#0a0b17;border-radius:10px;border:1px solid var(--line)}
+.dim{color:var(--dim)}#login{text-align:center;padding:60px 16px}
+</style></head><body>
+<div id="login"><h1>Sohelbr Admin</h1><p class="dim">Sign in with the admin Google account.</p><button class="b" id="signin">Sign in with Google</button><p id="err" class="off"></p></div>
+<div id="app" style="display:none">
+<header><h1>SOHELBR ADMIN</h1><nav id="nav"></nav><span style="flex:1"></span><span class="dim" id="who"></span><button class="b g" id="out">Sign out</button></header>
+<main id="main"></main></div>
+
+<script type="module">
+// ====== 1. PASTE YOUR GAME'S FIREBASE WEB CONFIG HERE (Firebase console > Project settings > Your apps > Web) ======
+const firebaseConfig = { apiKey: "", authDomain: "", projectId: "", appId: "" };
+const ADMIN_EMAIL = "vvvv04431@gmail.com";
+// ================================================================================================================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, getDocs, doc, setDoc, addDoc, updateDoc, deleteDoc, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
+const $ = s => document.querySelector(s);
+let tab = "reports";
+const tabs = { reports: "Reports", bans: "Bans", luck: "Luck Royale", events: "Events" };
+const fmt = ms => ms ? new Date(ms).toLocaleString() : "-";
+const toMs = v => v ? new Date(v).getTime() : 0;
+const toLocal = ms => { if (!ms) return ""; const d = new Date(ms - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+$("#signin").onclick = () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => $("#err").textContent = e.message);
+$("#out").onclick = () => signOut(auth);
+onAuthStateChanged(auth, u => {
+  const ok = u && u.email === ADMIN_EMAIL;
+  $("#login").style.display = ok ? "none" : "block"; $("#app").style.display = ok ? "block" : "none";
+  if (u && !ok) { $("#err").textContent = "This account is not the admin."; signOut(auth); }
+  if (ok) { $("#who").textContent = u.email; render(); }
+});
+$("#nav").innerHTML = Object.entries(tabs).map(([k, v]) => `<button data-t="${k}">${v}</button>`).join("");
+$("#nav").onclick = e => { if (e.target.dataset.t) { tab = e.target.dataset.t; render(); } };
+
+async function list(c, order) {
+  const q = order ? query(collection(db, c), orderBy(order, "desc"), limit(100)) : collection(db, c);
+  return (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function render() {
+  document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
+  $("#main").innerHTML = "<p class='dim'>Loading...</p>";
+  try { await ({ reports, bans, luck, events })[tab](); } catch (e) { $("#main").innerHTML = `<p class="off">${esc(e.message)}</p>`; }
+}
+
+// ---------- LUCK ROYALE ----------
+async function luck() {
+  const rows = await list("luck_items");
+  $("#main").innerHTML = `
+  <div class="card"><b>Add / edit prize</b><p class="dim">Active prizes inside their time window replace the built-in prize table. Leave end empty for no end. Weight = how often it drops (higher = more common).</p>
+  <div class="grid"><div><label>Name (shown to players)</label><input id="n"></div><div><label>Gold</label><input id="g" type="number" value="0"></div>
+  <div><label>Diamonds</label><input id="d" type="number" value="0"></div><div><label>Weight</label><input id="w" type="number" value="10"></div>
+  <div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div>
+  <div><label>Active</label><select id="a"><option value="1">Yes</option><option value="0">No</option></select></div></div>
+  <input id="eid" type="hidden"><button class="b" id="save">Save prize</button><button class="b g" id="clr">Clear</button></div>
+  <div class="card"><table><tr><th>Prize</th><th>Gold</th><th>Dia</th><th>Weight</th><th>Window</th><th></th></tr>
+  ${rows.map(r => `<tr><td>${esc(r.name)} <span class="${r.active ? "on" : "off"}">${r.active ? "active" : "off"}</span></td><td>${r.gold}</td><td>${r.dia}</td><td>${r.weight}</td>
+  <td class="dim">${fmt(r.start)}<br>${r.end ? fmt(r.end) : "no end"}</td><td><button class="b g" data-edit="${r.id}">Edit</button><button class="b r" data-del="${r.id}">Delete</button></td></tr>`).join("") || "<tr><td class='dim'>No prizes yet - the game uses its built-in table.</td></tr>"}</table></div>`;
+  const clear = () => { ["n", "s", "e", "eid"].forEach(i => $("#" + i).value = ""); $("#g").value = 0; $("#d").value = 0; $("#w").value = 10; };
+  $("#clr").onclick = clear;
+  $("#save").onclick = async () => {
+    const data = { name: $("#n").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, weight: Math.max(1, +$("#w").value || 1), start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1" };
+    if (!data.name || (!data.gold && !data.dia)) return alert("Give it a name and some gold or diamonds");
+    const id = $("#eid").value; id ? await setDoc(doc(db, "luck_items", id), data) : await addDoc(collection(db, "luck_items"), data); render();
+  };
+  $("#main").onclick = async e => {
+    if (e.target.dataset.del && confirm("Delete this prize?")) { await deleteDoc(doc(db, "luck_items", e.target.dataset.del)); render(); }
+    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#n").value = r.name; $("#g").value = r.gold; $("#d").value = r.dia; $("#w").value = r.weight; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; scrollTo(0, 0); }
+  };
+}
+
+// ---------- EVENTS ----------
+async function events() {
+  const rows = await list("events");
+  $("#main").innerHTML = `
+  <div class="card"><b>Add / edit event</b><p class="dim">Players see an event only while it is active and between start and end. Each player can claim its reward once.</p>
+  <div class="grid"><div><label>Title</label><input id="t"></div><div><label>Description</label><input id="ds"></div><div><label>Gold reward</label><input id="g" type="number" value="0"></div>
+  <div><label>Diamond reward</label><input id="d" type="number" value="0"></div><div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div>
+  <div><label>Active</label><select id="a"><option value="1">Yes</option><option value="0">No</option></select></div></div>
+  <input id="eid" type="hidden"><button class="b" id="save">Save event</button><button class="b g" id="clr">Clear</button></div>
+  <div class="card"><table><tr><th>Event</th><th>Reward</th><th>Window</th><th></th></tr>
+  ${rows.map(r => `<tr><td>${esc(r.title)} <span class="${r.active ? "on" : "off"}">${r.active ? "active" : "off"}</span><br><span class="dim">${esc(r.desc)}</span></td><td>${r.gold} gold, ${r.dia} dia</td>
+  <td class="dim">${fmt(r.start)}<br>${r.end ? fmt(r.end) : "no end"}</td><td><button class="b g" data-edit="${r.id}">Edit</button><button class="b r" data-del="${r.id}">Delete</button></td></tr>`).join("") || "<tr><td class='dim'>No events yet.</td></tr>"}</table></div>`;
+  $("#clr").onclick = () => render();
+  $("#save").onclick = async () => {
+    const data = { title: $("#t").value.trim(), desc: $("#ds").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1" };
+    if (!data.title) return alert("Give it a title");
+    const id = $("#eid").value; id ? await setDoc(doc(db, "events", id), data) : await addDoc(collection(db, "events"), data); render();
+  };
+  $("#main").onclick = async e => {
+    if (e.target.dataset.del && confirm("Delete this event?")) { await deleteDoc(doc(db, "events", e.target.dataset.del)); render(); }
+    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#t").value = r.title; $("#ds").value = r.desc; $("#g").value = r.gold; $("#d").value = r.dia; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; scrollTo(0, 0); }
+  };
+}
+
+// ---------- BANS ----------
+async function banPlayer(id, reason, days) {
+  await setDoc(doc(db, "bans", id), { reason, active: true, at: Date.now(), until: days > 0 ? Date.now() + days * 86400000 : 0 });
+}
+async function bans() {
+  const rows = await list("bans");
+  $("#main").innerHTML = `
+  <div class="card"><b>Ban a player by ID</b><div class="grid"><div><label>Player ID (e.g. SB123456)</label><input id="pid"></div><div><label>Reason</label><input id="rs" value="Hacking"></div>
+  <div><label>Days (0 = permanent)</label><input id="dy" type="number" value="0"></div></div><button class="b r" id="ban">Ban player</button></div>
+  <div class="card"><table><tr><th>Player</th><th>Reason</th><th>Until</th><th></th></tr>
+  ${rows.map(r => `<tr><td>${esc(r.id)} <span class="${r.active ? "off" : "on"}">${r.active ? "BANNED" : "lifted"}</span></td><td>${esc(r.reason)}</td><td class="dim">${r.until ? fmt(r.until) : "permanent"}</td>
+  <td><button class="b g" data-un="${r.id}">Unban</button></td></tr>`).join("") || "<tr><td class='dim'>Nobody is banned.</td></tr>"}</table></div>`;
+  $("#ban").onclick = async () => { const id = $("#pid").value.trim().toUpperCase(); if (!id) return; await banPlayer(id, $("#rs").value, +$("#dy").value || 0); render(); };
+  $("#main").onclick = async e => { if (e.target.dataset.un) { await setDoc(doc(db, "bans", e.target.dataset.un), { active: false, reason: "", until: 0, at: Date.now() }); render(); } };
+}
+
+// ---------- REPORTS ----------
+async function reports() {
+  const rows = (await list("reports", "at"));
+  const counts = {}; rows.forEach(r => counts[r.reported] = (counts[r.reported] || 0) + 1);
+  $("#main").innerHTML = `<div class="card"><table><tr><th>When</th><th>Reported</th><th>By</th><th>Reason</th><th>Status</th><th></th></tr>
+  ${rows.map(r => `<tr><td class="dim">${fmt(r.at)}</td><td><b>${esc(r.reported)}</b><br><span class="tag">${counts[r.reported]} report(s)</span></td><td>${esc(r.reporter)}</td><td>${esc(r.reason)}</td>
+  <td><span class="tag">${esc(r.status)}</span></td><td><button class="b g" data-open="${r.id}">Inspect</button></td></tr>`).join("") || "<tr><td class='dim'>No reports.</td></tr>"}</table></div><div id="detail"></div>`;
+  $("#main").onclick = e => { if (e.target.dataset.open) inspect(rows.find(r => r.id === e.target.dataset.open)); };
+}
+
+function inspect(r) {
+  let ev; try { ev = JSON.parse(r.evidence); } catch { ev = { samples: [], events: [] }; }
+  const S = ev.samples || [], E = ev.events || [];
+  const shots = E.filter(x => x[1] === "shot").length, hits = E.filter(x => x[1] === "hit" || x[1] === "kill");
+  const heads = hits.filter(x => x[3] === 2).length, kills = E.filter(x => x[1] === "kill").length;
+  const acc = shots ? Math.round(hits.length / shots * 100) : 0, hp = hits.length ? Math.round(heads / hits.length * 100) : 0;
+  const t0 = S.length ? S[0][0] : 0, t1 = S.length ? S[S.length - 1][0] : 0;
+  $("#detail").innerHTML = `<div class="card"><b>Report on ${esc(r.reported)}</b> <span class="dim">reported by ${esc(r.reporter)} - ${esc(r.reason)} - match ${esc(r.match)}</span>
+  <div class="grid" style="margin:10px 0"><div class="tag">Shots: ${shots}</div><div class="tag">Hits: ${hits.length}</div><div class="tag">Accuracy: ${acc}%</div><div class="tag">Headshot rate: ${hp}%</div><div class="tag">Kills: ${kills}</div></div>
+  <p class="dim">Blue = the reporting player's path, red = nearby enemies. Yellow ticks = shots, green = hits, orange = headshots, red = damage taken. Very high accuracy + headshot rate, or snapping straight to enemies, are signs of aimbot.</p>
+  <canvas id="cv" width="900" height="520"></canvas><input type="range" id="sl" min="0" max="${Math.max(0, S.length - 1)}" value="0">
+  <div class="dim" id="info"></div>
+  <button class="b r" id="b1">Ban 7 days</button><button class="b r" id="b2">Ban permanently</button><button class="b g" id="dm">Dismiss</button></div>`;
+  const cv = $("#cv"), c = cv.getContext("2d");
+  let xs = [], zs = [];
+  S.forEach(s => { xs.push(s[1]); zs.push(s[3]); for (let i = 0; i < s[5].length; i += 2) { xs.push(s[5][i]); zs.push(s[5][i + 1]); } });
+  const minx = Math.min(...xs, 0) - 10, maxx = Math.max(...xs, 1) + 10, minz = Math.min(...zs, 0) - 10, maxz = Math.max(...zs, 1) + 10;
+  const sc = Math.min(cv.width / (maxx - minx), cv.height / (maxz - minz));
+  const X = x => (x - minx) * sc, Z = z => (z - minz) * sc;
+  function draw(i) {
+    c.clearRect(0, 0, cv.width, cv.height);
+    c.strokeStyle = "#4da3ff"; c.lineWidth = 2; c.beginPath(); S.forEach((s, k) => k ? c.lineTo(X(s[1]), Z(s[3])) : c.moveTo(X(s[1]), Z(s[3]))); c.stroke();
+    const s = S[i]; if (!s) return;
+    c.fillStyle = "#e5484d"; for (let k = 0; k < s[5].length; k += 2) { c.beginPath(); c.arc(X(s[5][k]), Z(s[5][k + 1]), 6, 0, 7); c.fill(); }
+    c.fillStyle = "#4da3ff"; c.beginPath(); c.arc(X(s[1]), Z(s[3]), 8, 0, 7); c.fill();
+    const a = (s[4] + 180) * Math.PI / 180; c.strokeStyle = "#fff"; c.beginPath(); c.moveTo(X(s[1]), Z(s[3])); c.lineTo(X(s[1]) + Math.sin(a) * 30, Z(s[3]) + Math.cos(a) * 30); c.stroke();
+    const near = E.filter(e => Math.abs(e[0] - s[0]) < 0.6);
+    $("#info").textContent = `t=${(s[0] - t0).toFixed(1)}s of ${(t1 - t0).toFixed(1)}s   ` + near.map(e => e[1] + (e[1] !== "shot" ? " " + Math.round(e[2]) + " dmg, zone " + e[3] : "")).join(" | ");
+    near.forEach((e, k) => { c.fillStyle = e[1] === "shot" ? "#ffd400" : e[1] === "hurt" ? "#e5484d" : (e[3] === 2 ? "#ff8a00" : "#30a46c"); c.fillRect(10 + k * 18, 10, 14, 14); });
+  }
+  $("#sl").oninput = e => draw(+e.target.value); draw(0);
+  const finish = async (status, days) => {
+    if (status === "banned") await banPlayer(r.reported, r.reason + " (report " + r.id + ")", days);
+    await updateDoc(doc(db, "reports", r.id), { status }); render();
+  };
+  $("#b1").onclick = () => finish("banned", 7); $("#b2").onclick = () => finish("banned", 0); $("#dm").onclick = () => finish("dismissed", 0);
+  scrollTo(0, document.body.scrollHeight);
+}
+</script></body></html>

@@ -14,6 +14,7 @@ class Friend(val id: String, var name: String, var status: Int)
 class Msg(val time: String, val text: String, var read: Boolean)
 class Mission(val title: String, val goal: Int, val progress: Int, val reward: String, val claimed: Boolean)
 class PassRow(val level: Int, val free: String, val prem: String, val unlocked: Boolean, val freeDone: Boolean, val premDone: Boolean)
+class GameEvent(val id: String, val title: String, val desc: String, val reward: String, val claimed: Boolean)
 class StoreItem(val id: String, val name: String, val price: Int, val dia: Boolean, val owned: Boolean, val equipped: Boolean)
 
 /**
@@ -58,6 +59,10 @@ interface LobbyService {
     fun equip(id: String): String
     fun spinIsFree(): Boolean
     fun spin(): String
+    fun prizeNames(): List<String>
+    fun events(): List<GameEvent>
+    fun claimEvent(id: String): String
+    fun banned(): String?
     fun loginReady(): Boolean
     fun claimLogin(): String
     // after each match
@@ -65,7 +70,7 @@ interface LobbyService {
 }
 
 /** Standalone (offline) implementation: everything is saved in the phone's preferences. */
-class LocalLobbyService : LobbyService {
+class LocalLobbyService(private val bk: Backend) : LobbyService {
     private val prefs = Gdx.app.getPreferences("sohelbr_lobby")
     private val list = ArrayList<Friend>()
     private val msgs = ArrayList<Msg>()
@@ -83,10 +88,19 @@ class LocalLobbyService : LobbyService {
         arrayOf("emote", "Salute Emote", "200", "g"), arrayOf("pack", "Elite Backpack Skin", "150", "d")
     )
 
-    private val spinNames = arrayOf("50 Gold", "100 Gold", "250 Gold", "500 Gold", "5 Diamonds", "20 Diamonds", "100 Diamonds")
-    private val spinGold = intArrayOf(50, 100, 250, 500, 0, 0, 0)
-    private val spinDia = intArrayOf(0, 0, 0, 0, 5, 20, 100)
-    private val spinW = intArrayOf(30, 25, 15, 6, 14, 7, 3)
+    private val defaultPrizes = listOf(
+        RemotePrize("50 Gold", 50, 0, 30, 0, 0, true), RemotePrize("100 Gold", 100, 0, 25, 0, 0, true),
+        RemotePrize("250 Gold", 250, 0, 15, 0, 0, true), RemotePrize("500 Gold", 500, 0, 6, 0, 0, true),
+        RemotePrize("5 Diamonds", 0, 5, 14, 0, 0, true), RemotePrize("20 Diamonds", 0, 20, 7, 0, 0, true),
+        RemotePrize("100 Diamonds", 0, 100, 3, 0, 0, true)
+    )
+
+    /** prizes from the admin panel that are inside their time window; the built-in table is used if there are none */
+    private fun livePrizes(): List<RemotePrize> {
+        val now = System.currentTimeMillis()
+        val l = bk.luck.filter { it.active && now >= it.start && (it.end == 0L || now <= it.end) && (it.gold > 0 || it.dia > 0) }
+        return if (l.isEmpty()) defaultPrizes else l
+    }
 
     init {
         if (!prefs.contains("id")) {
@@ -257,14 +271,41 @@ class LocalLobbyService : LobbyService {
             if (gi("dia") < 20) return "Not enough diamonds (20 per spin)"
             addDia(-20)
         } else pi("lastSpin", today() + 1)
-        var r = java.util.Random().nextInt(spinW.sum())
+        val pr = livePrizes()
+        var r = java.util.Random().nextInt(pr.sumOf { it.weight })
         var k = 0
-        while (r >= spinW[k]) { r -= spinW[k]; k++ }
-        addGold(spinGold[k]); addDia(spinDia[k])
-        return "You won " + spinNames[k] + "!"
+        while (r >= pr[k].weight) { r -= pr[k].weight; k++ }
+        addGold(pr[k].gold); addDia(pr[k].dia)
+        return "You won " + pr[k].name + "!"
     }
+    override fun prizeNames(): List<String> = livePrizes().map { it.name }
 
     // ---- Events ----
+    private fun liveEvents(): List<RemoteEvent> {
+        val now = System.currentTimeMillis()
+        return bk.events.filter { it.active && now >= it.start && (it.end == 0L || now <= it.end) }
+    }
+    override fun events(): List<GameEvent> {
+        val done = prefs.getString("evDone", "").split(",")
+        return liveEvents().map { e ->
+            val rw = (if (e.gold > 0) "${e.gold} Gold " else "") + (if (e.dia > 0) "${e.dia} Diamonds" else "")
+            GameEvent(e.id, e.title, e.desc, rw.trim(), e.id in done)
+        }
+    }
+    override fun claimEvent(id: String): String {
+        val e = liveEvents().firstOrNull { it.id == id } ?: return "This event has ended"
+        val done = prefs.getString("evDone", "").split(",")
+        if (id in done) return "Already claimed"
+        prefs.putString("evDone", prefs.getString("evDone", "") + "," + id)
+        prefs.flush()
+        addGold(e.gold); addDia(e.dia)
+        return "Event reward claimed: ${e.title}"
+    }
+    override fun banned(): String? {
+        if (!bk.banActive()) return null
+        val u = if (bk.banUntil == 0L) "permanent" else "until " + java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.US).format(java.util.Date(bk.banUntil))
+        return (if (bk.banReason.isEmpty()) "Rule violation" else bk.banReason) + " ($u)"
+    }
     override fun loginReady() = gi("lastLogin") != today() + 1
     override fun claimLogin(): String {
         if (!loginReady()) return "Come back tomorrow"
@@ -391,6 +432,8 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
         val dx = w * 0.40f
         box(-1, dx, h * 0.022f, 26f, 30f, cyan)
         text("" + svc.diamonds(), dx + 38f, h * 0.02f, 1.5f, white)
+        val bnr = svc.banned()
+        if (bnr != null) text("BANNED: $bnr", w * 0.5f, h * 0.1f, 1.1f, red)
         text(if (svc.connected) "ONLINE" else "OFFLINE", w * 0.9f, h * 0.025f, 1.1f, if (svc.connected) green else dim)
 
         // ---- left menu ----
@@ -477,7 +520,7 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
         var hit = -1
         for (b in boxes) if (b.id >= 0 && tx >= b.x && tx <= b.x + b.w && ty >= b.y && ty <= b.y + b.h) hit = b.id
         when {
-            hit == 1 -> return true
+            hit == 1 -> { val bn = svc.banned(); if (bn != null) say("ACCOUNT BANNED: $bn") else return true }
             hit == 2 -> askFriend()
             hit == 3 -> askName()
             hit == 4 -> fscroll = maxOf(0, fscroll - 1)
@@ -508,6 +551,7 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
             hit in 540..559 -> say(svc.claimPass(hit - 539, true))
             hit in 700..703 -> say(svc.claimMission(hit - 700))
             hit == 800 -> say(svc.claimLogin())
+            hit in 810..812 -> { val evs = svc.events(); if (hit - 810 < evs.size) say(svc.claimEvent(evs[hit - 810].id)) }
         }
         return false
     }
@@ -546,11 +590,12 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
             }
             2 -> {
                 box(-1, rx, cy, rw, h * 0.34f, row)
-                val shown = if (spinT > 0f) (arrayOf("50 Gold", "250 Gold", "5 Diamonds", "100 Gold", "20 Diamonds", "500 Gold", "100 Diamonds")[((t * 14f).toInt()) % 7]) else if (spinResult.isEmpty()) "Spin to win!" else spinResult.removePrefix("You won ")
+                val pn = svc.prizeNames()
+                val shown = if (spinT > 0f) pn[((t * 14f).toInt()) % pn.size] else if (spinResult.isEmpty()) "Spin to win!" else spinResult.removePrefix("You won ")
                 ctext(shown, rx, cy, rw, h * 0.34f, 2.6f, if (spinT > 0f) dim else gold)
                 val free = svc.spinIsFree()
                 button(400, if (free) "FREE SPIN" else "SPIN - 20 DIAMONDS", px + pw * 0.2f, cy + h * 0.38f, pw * 0.6f, h * 0.11f, if (free) green else btn, 1.8f)
-                ctext("Prizes: 50 / 100 / 250 / 500 Gold  -  5 / 20 / 100 Diamonds.  One free spin every day.", px, py + ph - h * 0.1f, pw, h * 0.06f, 0.9f, dim)
+                ctext("Prizes: " + pn.joinToString(" / ").take(110) + "   (one free spin every day)", px, py + ph - h * 0.1f, pw, h * 0.06f, 0.9f, dim)
             }
             3 -> {
                 val rows = svc.passRows()
@@ -593,12 +638,16 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
                 text("DAILY LOGIN", rx + 14f, cy + 8f, 1.6f, gold)
                 text("Open the game every day: 100 Gold + 20 XP", rx + 14f, cy + rowH * 0.6f, 1.0f, white)
                 button(800, if (svc.loginReady()) "CLAIM" else "CLAIMED", rx + rw - w * 0.15f - 8f, cy + 10f, w * 0.15f, rowH - 10f, if (svc.loginReady()) green else locked, 1.2f)
-                box(-1, rx, cy + rowH * 1.4f, rw, rowH, row)
-                text("WINTER FESTIVAL", rx + 14f, cy + rowH * 1.4f + 8f, 1.5f, white)
-                text("Coming soon - limited-time skins and double XP weekend.", rx + 14f, cy + rowH * 1.4f + rowH * 0.5f, 1.0f, dim)
-                box(-1, rx, cy + rowH * 2.5f, rw, rowH, row)
-                text("RANKED SEASON 1", rx + 14f, cy + rowH * 2.5f + 8f, 1.5f, white)
-                text("Coming soon - needs the online server.", rx + 14f, cy + rowH * 2.5f + rowH * 0.5f, 1.0f, dim)
+                val evs = svc.events()
+                if (evs.isEmpty()) ctext("No other events right now - check back soon", px, cy + rowH * 1.5f, pw, rowH, 1.1f, dim)
+                for (k in 0 until minOf(3, evs.size)) {
+                    val e = evs[k]
+                    val ry = cy + rowH * (1.4f + k * 1.05f)
+                    box(-1, rx, ry, rw, rowH - 6f, row)
+                    text(e.title, rx + 14f, ry + 8f, 1.4f, white)
+                    text(e.desc.take(60) + "   Reward: " + e.reward, rx + 14f, ry + rowH * 0.5f, 0.9f, gold)
+                    button(810 + k, if (e.claimed) "CLAIMED" else "CLAIM", rx + rw - w * 0.15f - 8f, ry + 6f, w * 0.15f, rowH - 18f, if (e.claimed) locked else green, 1.0f)
+                }
             }
             6 -> {
                 val ms = svc.messages()

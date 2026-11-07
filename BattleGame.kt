@@ -131,6 +131,7 @@ class BattleGame : ApplicationAdapter() {
     private fun popDamage(p: Vector3, dmg: Float, zone: Int) {
         val n = dmg.toInt()
         if (n <= 0) return
+        ev.event(matchTime, if (zone == 3) "hurt" else if (zone == 4) "kill" else "hit", dmg, zone.toFloat(), 0f)
         pops.add(DmgPop(Vector3(p), "$n", zone, (Math.random().toFloat() - 0.5f) * 70f))
         if (pops.size > 24) pops.removeAt(0)
     }
@@ -307,6 +308,13 @@ class BattleGame : ApplicationAdapter() {
     private var lobbyCam: PerspectiveCamera? = null
     private var lobbyYaw = 0f
     private var reported = false
+    private val backend = Backend()
+    private val ev = Evidence()
+    private var evT = 0f
+    private var lastAttacker = ""
+    private val evBots = FloatArray(16)
+    private var reportSent = false
+    private var matchId = ""
     private var lastReward = ""
     private var stance = 0          // 0 standing, 1 sitting/crouched, 2 prone
     private var eyeH = 1.7f
@@ -1400,6 +1408,7 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun hurt(d: Float) {
+        lastAttacker = "BOT"
         takenAcc += d
         val a = minOf(armor, d * 0.6f)
         armor -= a
@@ -1995,7 +2004,7 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun renderLobby(w: Float, h: Float, dt: Float) {
-        val lb = lobby ?: Lobby(font, sb, shapes, LocalLobbyService()).also { lobby = it }
+        val lb = lobby ?: Lobby(font, sb, shapes, LocalLobbyService(backend)).also { lobby = it; backend.refresh(it.svc.myId()) }
         Gdx.gl.glViewport(0, 0, Gdx.graphics.width, Gdx.graphics.height)
         Gdx.gl.glClearColor(0.05f, 0.08f, 0.12f, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
@@ -2030,6 +2039,10 @@ class BattleGame : ApplicationAdapter() {
         if (go) {
             inLobby = false
             reported = false
+            reportSent = false
+            ev.clear()
+            lastAttacker = ""
+            matchId = lobby?.svc?.myId() + "-" + System.currentTimeMillis()
             restart()
         }
     }
@@ -2140,17 +2153,45 @@ class BattleGame : ApplicationAdapter() {
         var damaged = false
 
         val over = hp <= 0f || won
+        if (!over && !inLobby && dropState == 3) {
+            evT += dt
+            if (evT >= 0.25f) {
+                evT = 0f
+                var nb = 0
+                for (b in bots) {
+                    if (nb >= 8) break
+                    val dx = b.pos.x - cam.position.x
+                    val dz = b.pos.z - cam.position.z
+                    if (dx * dx + dz * dz < 6400f) { evBots[nb * 2] = b.pos.x; evBots[nb * 2 + 1] = b.pos.z; nb++ }
+                }
+                ev.sample(matchTime, cam.position.x, cam.position.y, cam.position.z, yaw, evBots, nb)
+            }
+        }
 
         if (over) {
             taps.clear()
+            if (Gdx.input.justTouched() && backend.enabled && !reportSent) {
+                val rx = Gdx.input.getX().toFloat()
+                val ry = Gdx.input.getY().toFloat()
+                if (ry > h * 0.36f && ry < h * 0.46f && (rx < w * 0.5f || rx >= w * 0.5f)) {
+                    reportSent = true
+                    val reason = if (rx < w * 0.5f) "Hacking / aimbot" else "Other abuse"
+                    val who = if (lastAttacker.isEmpty()) "unknown" else lastAttacker
+                    msg = "Sending report..."
+                    msgT = 3f
+                    backend.submitReport(lobby?.svc?.myId() ?: "", who, reason, matchId, ev.json()) { ok -> lastReward = if (ok) "Report sent - thank you" else "Report failed - check internet" }
+                    taps.clear()
+                }
+            }
             if (!reported) {
                 reported = true
                 lastReward = lobby?.svc?.recordMatch(kills, won && hp > 0f) ?: ""
             }
-            if (Gdx.input.justTouched()) {
+            if (Gdx.input.justTouched() && !(Gdx.input.getY() > h * 0.36f && Gdx.input.getY() < h * 0.46f && backend.enabled && !reportSent)) {
                 inLobby = true
                 lobbyYaw = 0f
                 if (lastReward.isNotEmpty()) lobby?.say(lastReward)
+                lobby?.let { backend.refresh(it.svc.myId()) }
             }
         } else {
             if (mapOpen) handleMapInput(w, h)
@@ -2380,6 +2421,7 @@ class BattleGame : ApplicationAdapter() {
                 cooldown = def.cd
                 flash = 0.07f
                 recoil = 1f
+                ev.event(matchTime, "shot", slot.type.toFloat(), yaw, pitch)
                 val shootDir = Vector3(cam.direction).nor()
                 if (tpp) {
                     // The crosshair belongs to the third-person camera, but bullets leave the player's eye.
@@ -3246,6 +3288,13 @@ class BattleGame : ApplicationAdapter() {
         font.data.setScale(3f)
 
         if (outside) centered("OUTSIDE ZONE! Run to the circle", h * 0.82f, w)
+        if (over && backend.enabled && !reportSent) {
+            val sc = font.data.scaleX
+            font.data.setScale(1.6f)
+            label("[ REPORT HACKER ]", w * 0.3f, h - h * 0.41f)
+            label("[ REPORT OTHER ]", w * 0.7f, h - h * 0.41f)
+            font.data.setScale(sc)
+        }
         if (hp <= 0f) centered("YOU DIED - Kills: $kills - tap to restart", h * 0.55f, w)
         else if (won && bots.isEmpty()) centered("WINNER WINNER! Kills: $kills - tap to restart", h * 0.55f, w)
         else if (won) centered("YOU SURVIVED! Kills: $kills - tap to restart", h * 0.55f, w)
