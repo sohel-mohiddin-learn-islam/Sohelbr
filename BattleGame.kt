@@ -306,6 +306,8 @@ class BattleGame : ApplicationAdapter() {
     private var lobby: Lobby? = null
     private var lobbyCam: PerspectiveCamera? = null
     private var lobbyYaw = 0f
+    private var reported = false
+    private var lastReward = ""
     private var stance = 0          // 0 standing, 1 sitting/crouched, 2 prone
     private var eyeH = 1.7f
     private var jumpV = 0f
@@ -1997,6 +1999,9 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glViewport(0, 0, Gdx.graphics.width, Gdx.graphics.height)
         Gdx.gl.glClearColor(0.05f, 0.08f, 0.12f, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
+        Gdx.gl.glDisable(GL20.GL_DEPTH_TEST)
+        lb.drawBackground(w, h)
+        Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
         val pa = pActor
         if (pa != null && humansOk) {
             val lc = lobbyCam ?: PerspectiveCamera(40f, w, h).also { lobbyCam = it }
@@ -2005,8 +2010,8 @@ class BattleGame : ApplicationAdapter() {
             lc.near = 0.1f
             lc.far = 60f
             // camera is shifted to the right so the soldier stands on the left side of the screen
-            lc.position.set(1.15f, 1.2f, 4.0f)
-            lc.lookAt(1.15f, 1.0f, 0f)
+            lc.position.set(0f, 1.2f, 4.2f)
+            lc.lookAt(0f, 1.0f, 0f)
             lc.up.set(0f, 1f, 0f)
             lc.update()
             lobbyYaw += dt * 18f
@@ -2024,6 +2029,7 @@ class BattleGame : ApplicationAdapter() {
         Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
         if (go) {
             inLobby = false
+            reported = false
             restart()
         }
     }
@@ -2137,9 +2143,14 @@ class BattleGame : ApplicationAdapter() {
 
         if (over) {
             taps.clear()
+            if (!reported) {
+                reported = true
+                lastReward = lobby?.svc?.recordMatch(kills, won && hp > 0f) ?: ""
+            }
             if (Gdx.input.justTouched()) {
                 inLobby = true
                 lobbyYaw = 0f
+                if (lastReward.isNotEmpty()) lobby?.say(lastReward)
             }
         } else {
             if (mapOpen) handleMapInput(w, h)
