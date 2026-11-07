@@ -102,6 +102,27 @@ class BattleGame : ApplicationAdapter() {
     private val shrinkTimes = floatArrayOf(120f, 100f, 90f, 70f, 50f, 60f)
     private val zoneDamage = floatArrayOf(1f, 2f, 4f, 6f, 8f, 10f)
 
+    // ---- hit-zone damage (multiplier of the gun's base damage) ----
+    // change these three numbers to tune the game
+    private val HEAD_MULT = 2.0f   // head shot: double damage
+    private val BODY_MULT = 1.0f   // chest / body: normal damage
+    private val LEG_MULT = 0.6f    // legs: 60 % damage
+
+    // floating damage numbers (Free Fire style)
+    private class DmgPop(val pos: Vector3, val text: String, val zone: Int, val dx: Float) { var age = 0f }
+    private val pops = ArrayList<DmgPop>()
+    private var takenAcc = 0f
+    private var takenT = 0f
+    private val popTmp = Vector3()
+
+    /** zone: 0 leg, 1 body, 2 head, 3 damage taken by the player (drawn on screen), 4 kill blow */
+    private fun popDamage(p: Vector3, dmg: Float, zone: Int) {
+        val n = dmg.toInt()
+        if (n <= 0) return
+        pops.add(DmgPop(Vector3(p), "$n", zone, (Math.random().toFloat() - 0.5f) * 70f))
+        if (pops.size > 24) pops.removeAt(0)
+    }
+
     // rifle muzzle of a bot in the aiming pose (bot-local: x left, y up, z forward), male / female
 
     private val mb = ModelBuilder()
@@ -1302,6 +1323,7 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun hurt(d: Float) {
+        takenAcc += d
         val a = minOf(armor, d * 0.6f)
         armor -= a
         hp -= d - a
@@ -1472,6 +1494,8 @@ class BattleGame : ApplicationAdapter() {
         hurtFlash = 0f
         hitMark = 0f
         hitHead = false
+        pops.clear()
+        takenAcc = 0f
         recoil = 0f
         reloading = false
         reloadT = 0f
@@ -1636,6 +1660,7 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun knockBot(b: Bot, dmg: Float, dx: Float, dz: Float) {
+        popDamage(Vector3(b.pos.x, b.pos.y + 1.5f, b.pos.z), minOf(dmg, b.hp), if (b.hp - dmg <= 0f) 4 else 1)
         b.hp -= dmg
         b.vehCd = 0.5f
         if (b.hp <= 0f) {
@@ -2194,6 +2219,20 @@ class BattleGame : ApplicationAdapter() {
         cooldown -= dt
         flash -= dt
         hitMark -= dt
+        run {
+            val it2 = pops.iterator()
+            while (it2.hasNext()) {
+                val q = it2.next()
+                q.age += dt
+                if (q.age > 0.95f) it2.remove()
+            }
+            takenT -= dt
+            if (takenAcc >= 1f && takenT <= 0f) {
+                popDamage(Vector3.Zero, takenAcc, 3)
+                takenAcc = 0f
+                takenT = 0.4f
+            }
+        }
         recoil = maxOf(0f, recoil - dt * 7f)
         if (reloading) {
             reloadT -= dt
@@ -2224,33 +2263,49 @@ class BattleGame : ApplicationAdapter() {
                 var best: Bot? = null
                 var bestDist = maxD
                 var bestHead = false
+                var bestZone = 1
+                val bestPos = Vector3()
                 for (b in bots) {
                     val hc = Vector3(b.pos.x, b.pos.y + 1.68f, b.pos.z)
                     val tc = Vector3(b.pos.x, b.pos.y + 1.25f, b.pos.z)
                     val lc = Vector3(b.pos.x, b.pos.y + 0.65f, b.pos.z)
                     var hit = false
                     var head = false
+                    var zone = 1
+                    var zc = tc
                     var d = 0f
                     if (Intersector.intersectRaySphere(ray, hc, 0.22f, null)) {
                         hit = true
                         head = true
+                        zone = 2
+                        zc = hc
                         d = hc.dst(cam.position)
                     } else if (Intersector.intersectRaySphere(ray, tc, 0.34f, null)) {
                         hit = true
+                        zone = 1
+                        zc = tc
                         d = tc.dst(cam.position)
                     } else if (Intersector.intersectRaySphere(ray, lc, 0.36f, null)) {
                         hit = true
+                        zone = 0
+                        zc = lc
                         d = lc.dst(cam.position)
                     }
                     if (hit && d < bestDist) {
                         bestDist = d
                         best = b
                         bestHead = head
+                        bestZone = zone
+                        bestPos.set(zc)
                     }
                 }
                 if (best == null && vHitV != null) damageVehicle(vHitV, def.dmg)
                 if (best != null) {
-                    best.hp -= if (bestHead) def.dmg * 2f else def.dmg
+                    val mult = when (bestZone) { 2 -> HEAD_MULT; 0 -> LEG_MULT; else -> BODY_MULT }
+                    val dealt = def.dmg * mult
+                    val real = minOf(dealt, best.hp)
+                    best.hp -= dealt
+                    popDamage(bestPos.add(0f, if (bestZone == 2) 0.3f else 0.15f, 0f), real, if (best.hp <= 0f) 4 else bestZone)
                     hitMark = 0.15f
                     hitHead = bestHead
                     if (bestHead) {
@@ -2903,6 +2958,38 @@ class BattleGame : ApplicationAdapter() {
         }
         font.data.setScale(2f)
         centered("ALIVE ${bots.size + (if (hp > 0f) 1 else 0)}    KILLS $kills    ${fmt(1200f - matchTime)}", h - 95f, w * 0.76f)
+        // floating damage numbers
+        for (q in pops) {
+            val t = q.age / 0.95f
+            val sx: Float
+            val sy: Float
+            if (q.zone == 3) {
+                sx = w / 2f - 230f + q.dx * 0.5f
+                sy = h / 2f - 20f + t * 100f
+            } else {
+                popTmp.set(q.pos)
+                cam.project(popTmp)
+                if (popTmp.z > 1f) continue
+                sx = popTmp.x + q.dx
+                sy = popTmp.y + t * 120f
+            }
+            val pop = 1f + maxOf(0f, 1f - t * 7f) * 0.6f
+            val base = when (q.zone) { 2 -> 3.4f; 4 -> 3.6f; 0 -> 2.0f; 3 -> 2.3f; else -> 2.6f }
+            font.data.setScale(base * pop)
+            layout.setText(font, q.text)
+            val a = (1f - t * t).coerceIn(0f, 1f)
+            font.setColor(0f, 0f, 0f, a)
+            font.draw(sb, q.text, sx - layout.width / 2f + 2f, sy - 2f)
+            when (q.zone) {
+                2 -> font.setColor(1f, 0.82f, 0.1f, a)      // head: gold
+                4 -> font.setColor(1f, 0.2f, 0.2f, a)       // killing blow: red
+                0 -> font.setColor(0.7f, 0.9f, 1f, a)       // leg: light blue
+                3 -> font.setColor(1f, 0.3f, 0.3f, a)       // damage you took
+                else -> font.setColor(1f, 1f, 1f, a)        // body: white
+            }
+            font.draw(sb, q.text, sx - layout.width / 2f, sy)
+        }
+        font.setColor(1f, 1f, 1f, 1f)
         font.data.setScale(1.4f)
         font.draw(sb, "FPS ${Gdx.graphics.framesPerSecond}", 410f, h - 20f)
         font.data.setScale(2.2f)
