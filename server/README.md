@@ -24,3 +24,9 @@ status and uploads reports.
 - A player id is created on the phone. A banned player can clear app data to get a new id. Real fix: sign-in with accounts (Google / phone number) - needed before real online play.
 - Prize/event time windows use the phone's clock until a server checks time. Rewards and wallet are still saved on the phone, so they can be edited by hackers until the server owns the wallet.
 - Reports need real human players. In the offline game the reported "player" is always BOT, so use it only to test the pipeline.
+
+## Admin panel sections
+- Store: gun skins (colour recolour), bundles, other items. Luck Royale: rings (groups of prizes), time windows, item prizes.
+- Sohel Pass: season title, end time, premium price, up to 30 levels with free + premium rewards. Missions: daily / weekly lists.
+- Events, Reports (with replay), Bans.
+After changing `firestore.rules` (new `config` collection) paste them again in Firebase > Firestore > Rules > Publish.

@@ -16,8 +16,12 @@ object BackendConfig {
     const val DB = "(default)"
 }
 
-class RemotePrize(val name: String, val gold: Int, val dia: Int, val weight: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "")
+class RemotePrize(val name: String, val gold: Int, val dia: Int, val weight: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "", val ring: String = "")
 class RemoteEvent(val id: String, val title: String, val desc: String, val gold: Int, val dia: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "")
+
+class PassLevel(val fg: Int, val fd: Int, val fi: String, val pg: Int, val pd: Int, val pi: String)
+class PassConfig(val title: String, val end: Long, val price: Int, val levels: List<PassLevel>)
+class MissionCfg(val title: String, val kind: String, val goal: Int, val weekly: Boolean, val gold: Int, val dia: Int, val xp: Int, val itemId: String)
 
 /** shop item made in the admin panel: kind = gunskin / bundle / other */
 class RemoteItem(val id: String, val name: String, val kind: String, val price: Int, val dia: Boolean, val gun: String, val body: String, val acc: String,
@@ -70,6 +74,8 @@ class Backend {
     @Volatile var luck: List<RemotePrize> = emptyList()
     @Volatile var events: List<RemoteEvent> = emptyList()
     @Volatile var store: List<RemoteItem> = emptyList()
+    @Volatile var pass: PassConfig? = null
+    @Volatile var missionCfg: List<MissionCfg> = emptyList()
     @Volatile var banned = false
     @Volatile var banReason = ""
     @Volatile var banUntil = 0L
@@ -104,7 +110,7 @@ class Backend {
                 val docs = JsonReader().parse(txt).get("documents")
                 if (docs != null) for (d in docs) {
                     val f = d.get("fields") ?: continue
-                    out.add(RemotePrize(s(f, "name"), n(f, "gold").toInt(), n(f, "dia").toInt(), maxOf(1, n(f, "weight").toInt()), n(f, "start"), n(f, "end"), b(f, "active"), s(f, "itemId")))
+                    out.add(RemotePrize(s(f, "name"), n(f, "gold").toInt(), n(f, "dia").toInt(), maxOf(1, n(f, "weight").toInt()), n(f, "start"), n(f, "end"), b(f, "active"), s(f, "itemId"), s(f, "ring")))
                 }
                 luck = out
             } catch (e: Throwable) { }
@@ -132,6 +138,27 @@ class Backend {
                         s(f, "contains").split(",").filter { it.isNotBlank() }, n(f, "gold").toInt(), n(f, "diaBonus").toInt(), n(f, "start"), n(f, "end"), b(f, "active"), f.get("shop") == null || b(f, "shop")))
                 }
                 store = out
+            } catch (e: Throwable) { }
+        }
+        call("GET", base() + "/config/pass", null, false) { code, txt ->
+            if (code == 200) try {
+                val f = JsonReader().parse(txt).get("fields")
+                if (f != null) {
+                    val lv = ArrayList<PassLevel>()
+                    val arr = JsonReader().parse(s(f, "levels"))
+                    for (c in arr) lv.add(PassLevel(c.getInt("fg", 0), c.getInt("fd", 0), c.getString("fi", ""), c.getInt("pg", 0), c.getInt("pd", 0), c.getString("pi", "")))
+                    if (lv.isNotEmpty()) pass = PassConfig(s(f, "title").ifEmpty { "SOHEL PASS" }, n(f, "end"), n(f, "price").toInt().let { if (it <= 0) 150 else it }, lv.take(30))
+                }
+            } catch (e: Throwable) { }
+        }
+        call("GET", base() + "/config/missions", null, false) { code, txt ->
+            if (code == 200) try {
+                val f = JsonReader().parse(txt).get("fields")
+                if (f != null) {
+                    val out = ArrayList<MissionCfg>()
+                    for (c in JsonReader().parse(s(f, "list"))) out.add(MissionCfg(c.getString("t", "Mission"), c.getString("k", "matches"), maxOf(1, c.getInt("n", 1)), c.getString("p", "daily") == "weekly", c.getInt("g", 0), c.getInt("d", 0), c.getInt("x", 40), c.getString("i", "")))
+                    missionCfg = out
+                }
             } catch (e: Throwable) { }
         }
         call("GET", base() + "/bans/" + playerId, null, false) { code, txt ->

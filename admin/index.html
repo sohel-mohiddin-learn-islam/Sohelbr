@@ -2,27 +2,34 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sohelbr Admin</title>
 <style>
-:root{--bg:#0f1020;--card:#1a1b33;--line:#2b2d52;--tx:#eef0ff;--dim:#9aa0c8;--gold:#ffbd1a;--red:#e5484d;--green:#30a46c}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px system-ui,sans-serif}
-header{display:flex;gap:8px;align-items:center;padding:12px 16px;background:var(--card);position:sticky;top:0;z-index:5;flex-wrap:wrap}
-header h1{font-size:18px;margin:0 12px 0 0;color:var(--gold)}
-nav button{background:none;border:1px solid var(--line);color:var(--tx);padding:8px 14px;border-radius:8px;cursor:pointer}
-nav button.on{background:var(--gold);color:#000;border-color:var(--gold)}
-main{padding:16px;max-width:1000px;margin:auto}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
-input,select,textarea{background:#0c0d1c;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:8px;width:100%}
+:root{--bg:#0b0715;--side:#120a24;--card:#1a1232;--line:#33265c;--tx:#f2eeff;--dim:#a79ccc;--gold:#ffbd1a;--red:#e5484d;--green:#30a46c;--cyan:#3cc8ff}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 0,#3a1450 0,#0b0715 55%) fixed;color:var(--tx);font:15px system-ui,sans-serif}
+#app{display:flex;min-height:100vh}
+aside{width:210px;background:var(--side);border-right:1px solid var(--line);padding:16px 12px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+aside h1{font-size:17px;margin:0 0 14px;color:var(--gold);letter-spacing:1px}
+nav{display:flex;flex-direction:column;gap:6px}
+nav button{text-align:left;background:#1d1438;border:1px solid var(--line);border-left:4px solid var(--gold);color:var(--tx);padding:11px 12px;border-radius:8px;cursor:pointer;font-weight:600;letter-spacing:.5px}
+nav button.on{background:var(--gold);color:#000}
+main{padding:20px;flex:1;max-width:1100px;min-width:0}
+h2{margin:0 0 14px;color:var(--gold);letter-spacing:1px}
+.card{background:linear-gradient(160deg,#1d1438,#150e29);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px;overflow-x:auto}
+input,select,textarea{background:#0c0818;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:8px;width:100%}
 label{display:block;font-size:12px;color:var(--dim);margin:8px 0 3px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-button.b{background:var(--green);color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;margin:8px 6px 0 0}
-button.r{background:var(--red)}button.g{background:#44476e}
-table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-.tag{padding:2px 8px;border-radius:99px;font-size:12px;background:#33365f}.on{color:var(--green)}.off{color:var(--red)}
+button.b{background:var(--green);color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;margin:8px 6px 0 0;font-weight:600}
+button.b.big{background:linear-gradient(180deg,#ffd34d,#ffa800);color:#000}
+button.r{background:var(--red)}button.g{background:#44368a}
+table{width:100%;border-collapse:collapse}td,th{padding:7px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--dim);font-size:12px;text-transform:uppercase}
+.tag{padding:2px 8px;border-radius:99px;font-size:12px;background:#33265c}.on{color:var(--green)}.off{color:var(--red)}
+.hexes{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.hx{width:74px;height:64px;clip-path:polygon(25% 3%,75% 3%,100% 50%,75% 97%,25% 97%,0 50%);background:#6b6f80;display:flex;align-items:center;justify-content:center;text-align:center;font-size:11px;font-weight:700;padding:6px;color:#fff}.hx.rare{background:#d99a1a;color:#000;width:88px;height:76px}
+.gunprev{position:relative;height:90px;margin:10px 0}.gunprev i{position:absolute;display:block}
 canvas{width:100%;background:#0a0b17;border-radius:10px;border:1px solid var(--line)}
 .dim{color:var(--dim)}#login{text-align:center;padding:60px 16px}
+@media(max-width:720px){#app{flex-direction:column}aside{width:100%;height:auto;position:static;flex-direction:row;flex-wrap:wrap;align-items:center}aside h1{margin:0 10px 0 0}nav{flex-direction:row;flex-wrap:wrap}nav button{border-left:1px solid var(--line);padding:8px 10px}}
 </style></head><body>
 <div id="login"><h1>Sohelbr Admin</h1><p class="dim">Sign in with the admin Google account.</p><button class="b" id="signin">Sign in with Google</button><p id="err" class="off"></p></div>
 <div id="app" style="display:none">
-<header><h1>SOHELBR ADMIN</h1><nav id="nav"></nav><span style="flex:1"></span><span class="dim" id="who"></span><button class="b g" id="out">Sign out</button></header>
+<aside><h1>SOHELBR ADMIN</h1><nav id="nav"></nav><span style="flex:1"></span><span class="dim" id="who"></span><button class="b g" id="out">Sign out</button></aside>
 <main id="main"></main></div>
 
 <script type="module">
@@ -36,8 +43,8 @@ import { getFirestore, collection, getDocs, doc, setDoc, addDoc, updateDoc, dele
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
 const $ = s => document.querySelector(s);
-let tab = "reports";
-const tabs = { reports: "Reports", bans: "Bans", luck: "Luck Royale", events: "Events", store: "Store" };
+let tab = "store";
+const tabs = { store: "Store", luck: "Luck Royale", pass: "Sohel Pass", missions: "Missions", events: "Events", reports: "Reports", bans: "Bans" };
 const GUNS = "USP,GLOCK 19,P320,M92FS,M1911,MP5,P90,VECTOR,SCORPION,MP7,M4A1,AK-47,SCAR-L,HK416,FAMAS,AUG A3,QBZ-95,AWM,BARRETT,M200,SVD,R700,G18C,VZ.61,MAC-10,DESERT EAGLE,M500".split(",");
 const itemOpts = items => `<option value="">None</option>` + items.map(i => `<option value="${i.id}">${esc(i.name)} (${esc(i.kind)})</option>`).join("");
 const fmt = ms => ms ? new Date(ms).toLocaleString() : "-";
@@ -63,7 +70,7 @@ async function list(c, order) {
 async function render() {
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
   $("#main").innerHTML = "<p class='dim'>Loading...</p>";
-  try { await ({ reports, bans, luck, events, store })[tab](); } catch (e) { $("#main").innerHTML = `<p class="off">${esc(e.message)}</p>`; }
+  try { await ({ reports, bans, luck, events, store, pass, missions })[tab](); } catch (e) { $("#main").innerHTML = `<p class="off">${esc(e.message)}</p>`; }
 }
 
 // ---------- LUCK ROYALE ----------
@@ -71,25 +78,26 @@ async function luck() {
   const rows = await list("luck_items"), shop = await list("store_items");
   $("#main").innerHTML = `
   <div class="card"><b>Add / edit prize</b><p class="dim">Active prizes inside their time window replace the built-in prize table. Leave end empty for no end. Weight = how often it drops (higher = more common).</p>
-  <div class="grid"><div><label>Name (shown to players)</label><input id="n"></div><div><label>Gold</label><input id="g" type="number" value="0"></div>
+  <div class="grid"><div><label>Ring name (group, e.g. Diwali Ring)</label><input id="ring" value="Lucky Ring"></div><div><label>Name (shown to players)</label><input id="n"></div><div><label>Gold</label><input id="g" type="number" value="0"></div>
   <div><label>Diamonds</label><input id="d" type="number" value="0"></div><div><label>Weight</label><input id="w" type="number" value="10"></div>
   <div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div>
   <div><label>Also gives item (optional)</label><select id="it">${itemOpts(shop)}</select></div>
   <div><label>Active</label><select id="a"><option value="1">Yes</option><option value="0">No</option></select></div></div>
   <input id="eid" type="hidden"><button class="b" id="save">Save prize</button><button class="b g" id="clr">Clear</button></div>
+  ${[...new Set(rows.map(r => r.ring || "Lucky Ring"))].map(rg => `<div class="card"><b>${esc(rg)}</b> <span class="dim">(preview - rarest prizes are the big gold hexagons, max 14 shown in game)</span><div class="hexes">${rows.filter(r => (r.ring || "Lucky Ring") === rg && r.active).sort((a, b) => a.weight - b.weight).slice(0, 14).map((r, i) => `<div class="hx ${i < 4 ? "rare" : ""}">${esc(r.name)}</div>`).join("")}</div></div>`).join("")}
   <div class="card"><table><tr><th>Prize</th><th>Gold</th><th>Dia</th><th>Weight</th><th>Window</th><th></th></tr>
   ${rows.map(r => `<tr><td>${esc(r.name)} <span class="${r.active ? "on" : "off"}">${r.active ? "active" : "off"}</span></td><td>${r.gold}</td><td>${r.dia}</td><td>${r.weight}</td>
   <td class="dim">${fmt(r.start)}<br>${r.end ? fmt(r.end) : "no end"}</td><td><button class="b g" data-edit="${r.id}">Edit</button><button class="b r" data-del="${r.id}">Delete</button></td></tr>`).join("") || "<tr><td class='dim'>No prizes yet - the game uses its built-in table.</td></tr>"}</table></div>`;
   const clear = () => { ["n", "s", "e", "eid"].forEach(i => $("#" + i).value = ""); $("#g").value = 0; $("#d").value = 0; $("#w").value = 10; };
   $("#clr").onclick = clear;
   $("#save").onclick = async () => {
-    const data = { name: $("#n").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, weight: Math.max(1, +$("#w").value || 1), start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1", itemId: $("#it").value };
+    const data = { name: $("#n").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, weight: Math.max(1, +$("#w").value || 1), start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1", itemId: $("#it").value, ring: $("#ring").value.trim() || "Lucky Ring" };
     if (!data.name || (!data.gold && !data.dia && !data.itemId)) return alert("Give it a name and some gold, diamonds or an item");
     const id = $("#eid").value; id ? await setDoc(doc(db, "luck_items", id), data) : await addDoc(collection(db, "luck_items"), data); render();
   };
   $("#main").onclick = async e => {
     if (e.target.dataset.del && confirm("Delete this prize?")) { await deleteDoc(doc(db, "luck_items", e.target.dataset.del)); render(); }
-    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#n").value = r.name; $("#g").value = r.gold; $("#d").value = r.dia; $("#w").value = r.weight; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; $("#it").value = r.itemId || ""; scrollTo(0, 0); }
+    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#n").value = r.name; $("#g").value = r.gold; $("#d").value = r.dia; $("#w").value = r.weight; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; $("#it").value = r.itemId || ""; $("#ring").value = r.ring || "Lucky Ring"; scrollTo(0, 0); }
   };
 }
 
@@ -134,7 +142,8 @@ async function store() {
   <div><label>Active</label><select id="a"><option value="1">Yes</option><option value="0">No</option></select></div>
   <div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div></div>
   <div id="gs" class="grid"><div><label>Gun</label><select id="gun">${GUNS.map(g => `<option>${g}</option>`).join("")}</select></div>
-  <div><label>Body colour</label><input id="bc" type="color" value="#c0392b"></div><div><label>Accent colour</label><input id="ac" type="color" value="#f1c40f"></div></div>
+  <div><label>Body colour</label><input id="bc" type="color" value="#c0392b"></div><div><label>Accent colour</label><input id="ac" type="color" value="#f1c40f"></div>
+  <div class="gunprev"><i id="g1" style="left:0;top:36px;width:34px;height:22px"></i><i id="g2" style="left:30px;top:30px;width:170px;height:32px"></i><i id="g3" style="left:30px;top:30px;width:170px;height:8px"></i><i style="left:200px;top:40px;width:60px;height:8px;background:#222"></i><i style="left:62px;top:62px;width:18px;height:34px;background:#222"></i><i id="g4" style="left:110px;top:62px;width:18px;height:28px"></i></div></div>
   <div id="bd" style="display:none"><div class="grid"><div><label>Bonus gold</label><input id="bg" type="number" value="0"></div><div><label>Bonus diamonds</label><input id="bdm" type="number" value="0"></div></div>
   <label>Items inside the bundle</label>${rows.filter(r => r.kind !== "bundle").map(r => `<label style="color:var(--tx)"><input type="checkbox" class="ct" value="${r.id}" style="width:auto"> ${esc(r.name)} (${esc(r.kind)})</label>`).join("") || "<span class='dim'>Create some items first.</span>"}</div>
   <input id="eid" type="hidden"><button class="b" id="save">Save item</button><button class="b g" id="clr">Clear</button></div>
@@ -143,6 +152,8 @@ async function store() {
   <td>${detail(r)}</td><td>${r.price} ${r.currency === "d" ? "dia" : "gold"}</td><td class="dim">${fmt(r.start)}<br>${r.end ? fmt(r.end) : "no end"}</td>
   <td><button class="b g" data-edit="${r.id}">Edit</button><button class="b r" data-del="${r.id}">Delete</button></td></tr>`).join("") || "<tr><td class='dim'>No store items yet.</td></tr>"}</table></div>`;
   const sync = () => { const k = $("#k").value; $("#gs").style.display = k === "gunskin" ? "grid" : "none"; $("#bd").style.display = k === "bundle" ? "block" : "none"; };
+  const paint = () => { ["g1", "g2"].forEach(i => $("#" + i).style.background = $("#bc").value); ["g3", "g4"].forEach(i => $("#" + i).style.background = $("#ac").value); };
+  $("#bc").oninput = paint; $("#ac").oninput = paint; paint();
   $("#k").onchange = sync; sync(); $("#clr").onclick = () => render();
   $("#save").onclick = async () => {
     const k = $("#k").value;
@@ -162,6 +173,49 @@ async function store() {
       if (r.gun) $("#gun").value = r.gun; $("#bc").value = r.body || "#c0392b"; $("#ac").value = r.acc || "#f1c40f"; $("#bg").value = r.gold || 0; $("#bdm").value = r.diaBonus || 0;
       const ids = (r.contains || "").split(","); document.querySelectorAll(".ct").forEach(x => x.checked = ids.includes(x.value)); scrollTo(0, 0);
     }
+  };
+}
+
+// ---------- SOHEL PASS ----------
+async function pass() {
+  const shop = await list("store_items");
+  const snap = (await getDocs(collection(db, "config"))).docs.find(d => d.id === "pass");
+  const cfg = snap ? snap.data() : {};
+  let lv; try { lv = JSON.parse(cfg.levels || "[]"); } catch { lv = []; }
+  if (!lv.length) lv = Array.from({ length: 20 }, (_, i) => { const l = i + 1; return { fg: l % 5 ? 50 + 10 * l : 0, fd: l % 5 ? 0 : 10, fi: "", pg: 0, pd: l % 5 ? 5 : 40, pi: "" }; });
+  const opt = sel => itemOpts(shop).replace(`value="${sel}"`, `value="${sel}" selected`);
+  const prow = (r, n) => `<tr><td>${n}</td><td><input type="number" value="${r.fg || 0}"></td><td><input type="number" value="${r.fd || 0}"></td><td><select>${opt(r.fi || "")}</select></td>
+  <td><input type="number" value="${r.pg || 0}"></td><td><input type="number" value="${r.pd || 0}"></td><td><select>${opt(r.pi || "")}</select></td><td><button class="b r rm">x</button></td></tr>`;
+  $("#main").innerHTML = `<h2>Sohel Pass</h2>
+  <div class="card"><div class="grid"><div><label>Season title</label><input id="pt" value="${esc(cfg.title || "SOHEL PASS")}"></div>
+  <div><label>Ends</label><input id="pe" type="datetime-local" value="${toLocal(cfg.end)}"></div>
+  <div><label>Premium price (diamonds)</label><input id="pp" type="number" value="${cfg.price || 150}"></div></div>
+  <p class="dim">Each level needs 100 pass XP. The LAST level is shown as the big "grand reward" card. Max 30 levels. Rewards can include a store item (skin / bundle).</p></div>
+  <div class="card"><table id="pt2"><tr><th>Lv</th><th>FREE gold</th><th>FREE dia</th><th>FREE item</th><th>PREMIUM gold</th><th>PREMIUM dia</th><th>PREMIUM item</th><th></th></tr>
+  ${lv.map((r, i) => prow(r, i + 1)).join("")}</table>
+  <button class="b g" id="add">+ Add level</button><button class="b" id="save">Save pass</button></div>`;
+  const read = () => [...document.querySelectorAll("#pt2 tr")].slice(1).map(tr => { const v = [...tr.querySelectorAll("input,select")].map(x => x.value); return { fg: +v[0] || 0, fd: +v[1] || 0, fi: v[2], pg: +v[3] || 0, pd: +v[4] || 0, pi: v[5] }; });
+  $("#add").onclick = () => { if (document.querySelectorAll("#pt2 tr").length > 30) return alert("Max 30 levels"); $("#pt2").insertAdjacentHTML("beforeend", prow({ fg: 50, fd: 0, fi: "", pg: 0, pd: 5, pi: "" }, document.querySelectorAll("#pt2 tr").length)); };
+  $("#main").onclick = e => { if (e.target.classList.contains("rm")) { e.target.closest("tr").remove(); [...document.querySelectorAll("#pt2 tr")].slice(1).forEach((tr, i) => tr.firstElementChild.textContent = i + 1); } };
+  $("#save").onclick = async () => { await setDoc(doc(db, "config", "pass"), { title: $("#pt").value.trim() || "SOHEL PASS", end: toMs($("#pe").value), price: +$("#pp").value || 150, levels: JSON.stringify(read()) }); alert("Pass saved"); render(); };
+}
+// ---------- MISSIONS ----------
+async function missions() {
+  const shop = await list("store_items");
+  const snap = (await getDocs(collection(db, "config"))).docs.find(d => d.id === "missions");
+  let ms; try { ms = JSON.parse(snap ? snap.data().list : "[]"); } catch { ms = []; }
+  const opt = sel => itemOpts(shop).replace(`value="${sel}"`, `value="${sel}" selected`);
+  const row = r => `<tr><td><input value="${esc(r.t)}"></td><td><select><option value="matches" ${r.k === "matches" ? "selected" : ""}>Play matches</option><option value="kills" ${r.k === "kills" ? "selected" : ""}>Get kills</option><option value="wins" ${r.k === "wins" ? "selected" : ""}>Win matches</option></select></td>
+  <td><input type="number" value="${r.n || 1}"></td><td><select><option value="daily" ${r.p !== "weekly" ? "selected" : ""}>Daily</option><option value="weekly" ${r.p === "weekly" ? "selected" : ""}>Weekly</option></select></td>
+  <td><input type="number" value="${r.g || 0}"></td><td><input type="number" value="${r.d || 0}"></td><td><input type="number" value="${r.x ?? 40}"></td><td><select>${opt(r.i || "")}</select></td><td><button class="b r rm">x</button></td></tr>`;
+  $("#main").innerHTML = `<h2>Missions</h2><div class="card"><p class="dim">Leave the list empty to use the game's built-in missions. Daily missions reset at midnight, weekly on Monday.</p>
+  <table id="mt"><tr><th>Title</th><th>Type</th><th>Goal</th><th>Period</th><th>Gold</th><th>Diamonds</th><th>XP</th><th>Item</th><th></th></tr>${ms.map(row).join("")}</table>
+  <button class="b g" id="add">+ Add mission</button><button class="b" id="save">Save missions</button></div>`;
+  $("#add").onclick = () => { $("#mt").insertAdjacentHTML("beforeend", row({ t: "New mission", k: "matches", n: 1, p: "daily", g: 50, d: 0, x: 40, i: "" })); };
+  $("#main").onclick = e => { if (e.target.classList.contains("rm")) e.target.closest("tr").remove(); };
+  $("#save").onclick = async () => {
+    const list_ = [...document.querySelectorAll("#mt tr")].slice(1).map(tr => { const v = [...tr.querySelectorAll("input,select")].map(x => x.value); return { t: v[0], k: v[1], n: +v[2] || 1, p: v[3], g: +v[4] || 0, d: +v[5] || 0, x: +v[6] || 0, i: v[7] }; });
+    await setDoc(doc(db, "config", "missions"), { list: JSON.stringify(list_) }); alert("Missions saved");
   };
 }
 
