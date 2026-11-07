@@ -28,7 +28,7 @@ canvas{width:100%;background:#0a0b17;border-radius:10px;border:1px solid var(--l
 <script type="module">
 // ====== 1. PASTE YOUR GAME'S FIREBASE WEB CONFIG HERE (Firebase console > Project settings > Your apps > Web) ======
 const firebaseConfig = { apiKey: "AIzaSyAatdMvRVTpLwbaWTYVnvvKtTt4Mo2udBU", authDomain: "sohelbr-73c46.firebaseapp.com", projectId: "sohelbr-73c46", appId: "1:681296539039:web:1d3941414eb840ed5ee1aa" };
-const ADMIN_EMAIL = "vvvv04431@gmail.com";
+const ADMIN_EMAIL = "sohelsk9032899952@gmail.com";
 // ================================================================================================================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -37,7 +37,9 @@ import { getFirestore, collection, getDocs, doc, setDoc, addDoc, updateDoc, dele
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
 const $ = s => document.querySelector(s);
 let tab = "reports";
-const tabs = { reports: "Reports", bans: "Bans", luck: "Luck Royale", events: "Events" };
+const tabs = { reports: "Reports", bans: "Bans", luck: "Luck Royale", events: "Events", store: "Store" };
+const GUNS = "USP,GLOCK 19,P320,M92FS,M1911,MP5,P90,VECTOR,SCORPION,MP7,M4A1,AK-47,SCAR-L,HK416,FAMAS,AUG A3,QBZ-95,AWM,BARRETT,M200,SVD,R700,G18C,VZ.61,MAC-10,DESERT EAGLE,M500".split(",");
+const itemOpts = items => `<option value="">None</option>` + items.map(i => `<option value="${i.id}">${esc(i.name)} (${esc(i.kind)})</option>`).join("");
 const fmt = ms => ms ? new Date(ms).toLocaleString() : "-";
 const toMs = v => v ? new Date(v).getTime() : 0;
 const toLocal = ms => { if (!ms) return ""; const d = new Date(ms - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
@@ -61,17 +63,18 @@ async function list(c, order) {
 async function render() {
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
   $("#main").innerHTML = "<p class='dim'>Loading...</p>";
-  try { await ({ reports, bans, luck, events })[tab](); } catch (e) { $("#main").innerHTML = `<p class="off">${esc(e.message)}</p>`; }
+  try { await ({ reports, bans, luck, events, store })[tab](); } catch (e) { $("#main").innerHTML = `<p class="off">${esc(e.message)}</p>`; }
 }
 
 // ---------- LUCK ROYALE ----------
 async function luck() {
-  const rows = await list("luck_items");
+  const rows = await list("luck_items"), shop = await list("store_items");
   $("#main").innerHTML = `
   <div class="card"><b>Add / edit prize</b><p class="dim">Active prizes inside their time window replace the built-in prize table. Leave end empty for no end. Weight = how often it drops (higher = more common).</p>
   <div class="grid"><div><label>Name (shown to players)</label><input id="n"></div><div><label>Gold</label><input id="g" type="number" value="0"></div>
   <div><label>Diamonds</label><input id="d" type="number" value="0"></div><div><label>Weight</label><input id="w" type="number" value="10"></div>
   <div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div>
+  <div><label>Also gives item (optional)</label><select id="it">${itemOpts(shop)}</select></div>
   <div><label>Active</label><select id="a"><option value="1">Yes</option><option value="0">No</option></select></div></div>
   <input id="eid" type="hidden"><button class="b" id="save">Save prize</button><button class="b g" id="clr">Clear</button></div>
   <div class="card"><table><tr><th>Prize</th><th>Gold</th><th>Dia</th><th>Weight</th><th>Window</th><th></th></tr>
@@ -80,23 +83,24 @@ async function luck() {
   const clear = () => { ["n", "s", "e", "eid"].forEach(i => $("#" + i).value = ""); $("#g").value = 0; $("#d").value = 0; $("#w").value = 10; };
   $("#clr").onclick = clear;
   $("#save").onclick = async () => {
-    const data = { name: $("#n").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, weight: Math.max(1, +$("#w").value || 1), start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1" };
-    if (!data.name || (!data.gold && !data.dia)) return alert("Give it a name and some gold or diamonds");
+    const data = { name: $("#n").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, weight: Math.max(1, +$("#w").value || 1), start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1", itemId: $("#it").value };
+    if (!data.name || (!data.gold && !data.dia && !data.itemId)) return alert("Give it a name and some gold, diamonds or an item");
     const id = $("#eid").value; id ? await setDoc(doc(db, "luck_items", id), data) : await addDoc(collection(db, "luck_items"), data); render();
   };
   $("#main").onclick = async e => {
     if (e.target.dataset.del && confirm("Delete this prize?")) { await deleteDoc(doc(db, "luck_items", e.target.dataset.del)); render(); }
-    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#n").value = r.name; $("#g").value = r.gold; $("#d").value = r.dia; $("#w").value = r.weight; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; scrollTo(0, 0); }
+    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#n").value = r.name; $("#g").value = r.gold; $("#d").value = r.dia; $("#w").value = r.weight; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; $("#it").value = r.itemId || ""; scrollTo(0, 0); }
   };
 }
 
 // ---------- EVENTS ----------
 async function events() {
-  const rows = await list("events");
+  const rows = await list("events"), shop = await list("store_items");
   $("#main").innerHTML = `
   <div class="card"><b>Add / edit event</b><p class="dim">Players see an event only while it is active and between start and end. Each player can claim its reward once.</p>
   <div class="grid"><div><label>Title</label><input id="t"></div><div><label>Description</label><input id="ds"></div><div><label>Gold reward</label><input id="g" type="number" value="0"></div>
   <div><label>Diamond reward</label><input id="d" type="number" value="0"></div><div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div>
+  <div><label>Also gives item (optional)</label><select id="it">${itemOpts(shop)}</select></div>
   <div><label>Active</label><select id="a"><option value="1">Yes</option><option value="0">No</option></select></div></div>
   <input id="eid" type="hidden"><button class="b" id="save">Save event</button><button class="b g" id="clr">Clear</button></div>
   <div class="card"><table><tr><th>Event</th><th>Reward</th><th>Window</th><th></th></tr>
@@ -104,13 +108,60 @@ async function events() {
   <td class="dim">${fmt(r.start)}<br>${r.end ? fmt(r.end) : "no end"}</td><td><button class="b g" data-edit="${r.id}">Edit</button><button class="b r" data-del="${r.id}">Delete</button></td></tr>`).join("") || "<tr><td class='dim'>No events yet.</td></tr>"}</table></div>`;
   $("#clr").onclick = () => render();
   $("#save").onclick = async () => {
-    const data = { title: $("#t").value.trim(), desc: $("#ds").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1" };
+    const data = { title: $("#t").value.trim(), desc: $("#ds").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1", itemId: $("#it").value };
     if (!data.title) return alert("Give it a title");
     const id = $("#eid").value; id ? await setDoc(doc(db, "events", id), data) : await addDoc(collection(db, "events"), data); render();
   };
   $("#main").onclick = async e => {
     if (e.target.dataset.del && confirm("Delete this event?")) { await deleteDoc(doc(db, "events", e.target.dataset.del)); render(); }
-    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#t").value = r.title; $("#ds").value = r.desc; $("#g").value = r.gold; $("#d").value = r.dia; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; scrollTo(0, 0); }
+    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#t").value = r.title; $("#ds").value = r.desc; $("#g").value = r.gold; $("#d").value = r.dia; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; $("#it").value = r.itemId || ""; scrollTo(0, 0); }
+  };
+}
+
+// ---------- STORE ----------
+async function store() {
+  const rows = await list("store_items");
+  const detail = r => r.kind === "gunskin"
+    ? `${esc(r.gun)} <span style="background:${esc(r.body)};padding:0 10px;border-radius:4px">&nbsp;</span> <span style="background:${esc(r.acc)};padding:0 10px;border-radius:4px">&nbsp;</span>`
+    : r.kind === "bundle" ? `${(r.contains || "").split(",").filter(Boolean).length} items, +${r.gold || 0} gold, +${r.diaBonus || 0} dia` : "-";
+  $("#main").innerHTML = `
+  <div class="card"><b>Add / edit store item</b><p class="dim">Types: <b>Gun skin</b> recolours one gun (pick the gun and two colours). <b>Bundle</b> gives several items plus optional gold/diamonds. <b>Other</b> is a collectible/cosmetic name only. Choose "No (prize only)" for items that are only given as Luck Royale / Event prizes.</p>
+  <div class="grid"><div><label>Name</label><input id="n"></div>
+  <div><label>Type</label><select id="k"><option value="gunskin">Gun skin</option><option value="bundle">Bundle</option><option value="other">Other / outfit</option></select></div>
+  <div><label>Price</label><input id="p" type="number" value="100"></div>
+  <div><label>Currency</label><select id="c"><option value="g">Gold</option><option value="d">Diamonds</option></select></div>
+  <div><label>Show in store</label><select id="sh"><option value="1">Yes</option><option value="0">No (prize only)</option></select></div>
+  <div><label>Active</label><select id="a"><option value="1">Yes</option><option value="0">No</option></select></div>
+  <div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div></div>
+  <div id="gs" class="grid"><div><label>Gun</label><select id="gun">${GUNS.map(g => `<option>${g}</option>`).join("")}</select></div>
+  <div><label>Body colour</label><input id="bc" type="color" value="#c0392b"></div><div><label>Accent colour</label><input id="ac" type="color" value="#f1c40f"></div></div>
+  <div id="bd" style="display:none"><div class="grid"><div><label>Bonus gold</label><input id="bg" type="number" value="0"></div><div><label>Bonus diamonds</label><input id="bdm" type="number" value="0"></div></div>
+  <label>Items inside the bundle</label>${rows.filter(r => r.kind !== "bundle").map(r => `<label style="color:var(--tx)"><input type="checkbox" class="ct" value="${r.id}" style="width:auto"> ${esc(r.name)} (${esc(r.kind)})</label>`).join("") || "<span class='dim'>Create some items first.</span>"}</div>
+  <input id="eid" type="hidden"><button class="b" id="save">Save item</button><button class="b g" id="clr">Clear</button></div>
+  <div class="card"><table><tr><th>Item</th><th>Details</th><th>Price</th><th>Window</th><th></th></tr>
+  ${rows.map(r => `<tr><td>${esc(r.name)} <span class="${r.active ? "on" : "off"}">${r.active ? "active" : "off"}</span><br><span class="tag">${esc(r.kind)}</span>${r.shop === false ? " <span class='tag'>prize only</span>" : ""}</td>
+  <td>${detail(r)}</td><td>${r.price} ${r.currency === "d" ? "dia" : "gold"}</td><td class="dim">${fmt(r.start)}<br>${r.end ? fmt(r.end) : "no end"}</td>
+  <td><button class="b g" data-edit="${r.id}">Edit</button><button class="b r" data-del="${r.id}">Delete</button></td></tr>`).join("") || "<tr><td class='dim'>No store items yet.</td></tr>"}</table></div>`;
+  const sync = () => { const k = $("#k").value; $("#gs").style.display = k === "gunskin" ? "grid" : "none"; $("#bd").style.display = k === "bundle" ? "block" : "none"; };
+  $("#k").onchange = sync; sync(); $("#clr").onclick = () => render();
+  $("#save").onclick = async () => {
+    const k = $("#k").value;
+    const data = { name: $("#n").value.trim(), kind: k, price: +$("#p").value || 0, currency: $("#c").value, shop: $("#sh").value === "1", active: $("#a").value === "1", start: toMs($("#s").value), end: toMs($("#e").value),
+      gun: k === "gunskin" ? $("#gun").value : "", body: $("#bc").value, acc: $("#ac").value, gold: k === "bundle" ? +$("#bg").value || 0 : 0, diaBonus: k === "bundle" ? +$("#bdm").value || 0 : 0,
+      contains: k === "bundle" ? [...document.querySelectorAll(".ct:checked")].map(x => x.value).join(",") : "" };
+    if (!data.name) return alert("Give it a name");
+    if (k === "bundle" && !data.contains && !data.gold && !data.diaBonus) return alert("A bundle needs items or a bonus");
+    const id = $("#eid").value; id ? await setDoc(doc(db, "store_items", id), data) : await addDoc(collection(db, "store_items"), data); render();
+  };
+  $("#main").onclick = async e => {
+    if (e.target.dataset.del && confirm("Delete this item?")) { await deleteDoc(doc(db, "store_items", e.target.dataset.del)); render(); }
+    if (e.target.dataset.edit) {
+      const r = rows.find(x => x.id === e.target.dataset.edit);
+      $("#eid").value = r.id; $("#n").value = r.name; $("#k").value = r.kind; sync(); $("#p").value = r.price; $("#c").value = r.currency || "g"; $("#sh").value = r.shop === false ? "0" : "1";
+      $("#a").value = r.active ? "1" : "0"; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end);
+      if (r.gun) $("#gun").value = r.gun; $("#bc").value = r.body || "#c0392b"; $("#ac").value = r.acc || "#f1c40f"; $("#bg").value = r.gold || 0; $("#bdm").value = r.diaBonus || 0;
+      const ids = (r.contains || "").split(","); document.querySelectorAll(".ct").forEach(x => x.checked = ids.includes(x.value)); scrollTo(0, 0);
+    }
   };
 }
 

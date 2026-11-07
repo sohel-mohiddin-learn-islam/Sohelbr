@@ -16,8 +16,12 @@ object BackendConfig {
     const val DB = "(default)"
 }
 
-class RemotePrize(val name: String, val gold: Int, val dia: Int, val weight: Int, val start: Long, val end: Long, val active: Boolean)
-class RemoteEvent(val id: String, val title: String, val desc: String, val gold: Int, val dia: Int, val start: Long, val end: Long, val active: Boolean)
+class RemotePrize(val name: String, val gold: Int, val dia: Int, val weight: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "")
+class RemoteEvent(val id: String, val title: String, val desc: String, val gold: Int, val dia: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "")
+
+/** shop item made in the admin panel: kind = gunskin / bundle / other */
+class RemoteItem(val id: String, val name: String, val kind: String, val price: Int, val dia: Boolean, val gun: String, val body: String, val acc: String,
+                 val contains: List<String>, val gold: Int, val diaBonus: Int, val start: Long, val end: Long, val active: Boolean, val shop: Boolean)
 
 /** Last ~45 seconds of play (positions, shots, hits, damage taken) - attached to a player report so the admin can replay it. */
 class Evidence {
@@ -65,6 +69,7 @@ class Backend {
     val enabled: Boolean get() = BackendConfig.PROJECT_ID.isNotEmpty() && BackendConfig.API_KEY.isNotEmpty()
     @Volatile var luck: List<RemotePrize> = emptyList()
     @Volatile var events: List<RemoteEvent> = emptyList()
+    @Volatile var store: List<RemoteItem> = emptyList()
     @Volatile var banned = false
     @Volatile var banReason = ""
     @Volatile var banUntil = 0L
@@ -99,7 +104,7 @@ class Backend {
                 val docs = JsonReader().parse(txt).get("documents")
                 if (docs != null) for (d in docs) {
                     val f = d.get("fields") ?: continue
-                    out.add(RemotePrize(s(f, "name"), n(f, "gold").toInt(), n(f, "dia").toInt(), maxOf(1, n(f, "weight").toInt()), n(f, "start"), n(f, "end"), b(f, "active")))
+                    out.add(RemotePrize(s(f, "name"), n(f, "gold").toInt(), n(f, "dia").toInt(), maxOf(1, n(f, "weight").toInt()), n(f, "start"), n(f, "end"), b(f, "active"), s(f, "itemId")))
                 }
                 luck = out
             } catch (e: Throwable) { }
@@ -111,9 +116,22 @@ class Backend {
                 if (docs != null) for (d in docs) {
                     val f = d.get("fields") ?: continue
                     val id = d.getString("name", "").substringAfterLast('/')
-                    out.add(RemoteEvent(id, s(f, "title"), s(f, "desc"), n(f, "gold").toInt(), n(f, "dia").toInt(), n(f, "start"), n(f, "end"), b(f, "active")))
+                    out.add(RemoteEvent(id, s(f, "title"), s(f, "desc"), n(f, "gold").toInt(), n(f, "dia").toInt(), n(f, "start"), n(f, "end"), b(f, "active"), s(f, "itemId")))
                 }
                 events = out
+            } catch (e: Throwable) { }
+        }
+        call("GET", base() + "/store_items?pageSize=200", null, false) { code, txt ->
+            if (code == 200) try {
+                val out = ArrayList<RemoteItem>()
+                val docs = JsonReader().parse(txt).get("documents")
+                if (docs != null) for (d in docs) {
+                    val f = d.get("fields") ?: continue
+                    val id = d.getString("name", "").substringAfterLast('/')
+                    out.add(RemoteItem(id, s(f, "name"), s(f, "kind"), n(f, "price").toInt(), s(f, "currency") == "d", s(f, "gun"), s(f, "body"), s(f, "acc"),
+                        s(f, "contains").split(",").filter { it.isNotBlank() }, n(f, "gold").toInt(), n(f, "diaBonus").toInt(), n(f, "start"), n(f, "end"), b(f, "active"), f.get("shop") == null || b(f, "shop")))
+                }
+                store = out
             } catch (e: Throwable) { }
         }
         call("GET", base() + "/bans/" + playerId, null, false) { code, txt ->

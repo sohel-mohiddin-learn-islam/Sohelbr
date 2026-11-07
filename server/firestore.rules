@@ -3,11 +3,15 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     function isAdmin() {
-      return request.auth != null && request.auth.token.email == 'vvvv04431@gmail.com';
+      return request.auth != null && request.auth.token.email == 'sohelsk9032899952@gmail.com';
     }
 
     // Luck Royale prizes and events: the game can read them, only you can change them.
     match /luck_items/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /store_items/{id} {
       allow read: if true;
       allow write: if isAdmin();
     }

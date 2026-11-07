@@ -15,6 +15,7 @@ class Msg(val time: String, val text: String, var read: Boolean)
 class Mission(val title: String, val goal: Int, val progress: Int, val reward: String, val claimed: Boolean)
 class PassRow(val level: Int, val free: String, val prem: String, val unlocked: Boolean, val freeDone: Boolean, val premDone: Boolean)
 class GameEvent(val id: String, val title: String, val desc: String, val reward: String, val claimed: Boolean)
+class GunSkin(val gun: String, val body: Int, val acc: Int)
 class StoreItem(val id: String, val name: String, val price: Int, val dia: Boolean, val owned: Boolean, val equipped: Boolean)
 
 /**
@@ -63,6 +64,7 @@ interface LobbyService {
     fun events(): List<GameEvent>
     fun claimEvent(id: String): String
     fun banned(): String?
+    fun equippedGunSkins(): List<GunSkin>
     fun loginReady(): Boolean
     fun claimLogin(): String
     // after each match
@@ -241,26 +243,57 @@ class LocalLobbyService(private val bk: Backend) : LobbyService {
     }
 
     // ---- Store ----
+    private fun liveStore(): List<RemoteItem> {
+        val now = System.currentTimeMillis()
+        return bk.store.filter { it.shop && it.active && now >= it.start && (it.end == 0L || now <= it.end) }
+    }
+    private fun label(r: RemoteItem) = when (r.kind) { "gunskin" -> r.name + " (" + r.gun + " skin)"; "bundle" -> r.name + " (bundle)"; else -> r.name }
+    private fun ownedList() = prefs.getString("owned", "camo").split(",")
+    private fun grant(id: String) {
+        if (id.isBlank() || id in ownedList()) return
+        prefs.putString("owned", prefs.getString("owned", "camo") + "," + id)
+        prefs.flush()
+    }
     override fun storeItems(): List<StoreItem> {
-        val owned = prefs.getString("owned", "camo").split(",")
+        val owned = ownedList()
         val eq = prefs.getString("equipped", "camo").split(",")
-        return items.map { StoreItem(it[0], it[1], it[2].toInt(), it[3] == "d", it[0] in owned, it[0] in eq) }
+        val out = ArrayList<StoreItem>()
+        for (it in items) out.add(StoreItem(it[0], it[1], it[2].toInt(), it[3] == "d", it[0] in owned, it[0] in eq))
+        for (r in liveStore()) out.add(StoreItem(r.id, label(r), r.price, r.dia, r.id in owned, r.id in eq))
+        return out
     }
     override fun buy(id: String): String {
         val it = storeItems().firstOrNull { x -> x.id == id } ?: return ""
         if (it.owned) return "You already own ${it.name}"
         if (it.dia) { if (gi("dia") < it.price) return "Not enough diamonds"; addDia(-it.price) }
         else { if (gi("gold") < it.price) return "Not enough gold"; addGold(-it.price) }
-        prefs.putString("owned", prefs.getString("owned", "camo") + "," + id)
-        prefs.flush()
+        grant(id)
+        val r = bk.store.firstOrNull { x -> x.id == id }
+        if (r != null && r.kind == "bundle") {
+            for (c in r.contains) grant(c)
+            addGold(r.gold); addDia(r.diaBonus)
+            return "${r.name} bundle bought - items added to your collection"
+        }
         return "${it.name} bought"
     }
     override fun equip(id: String): String {
         val eq = prefs.getString("equipped", "camo").split(",").toMutableList()
-        if (id in eq) eq.remove(id) else eq.add(id)
+        if (id in eq) eq.remove(id)
+        else {
+            eq.add(id)
+            val r = bk.store.firstOrNull { x -> x.id == id }
+            if (r != null && r.kind == "gunskin") eq.removeAll { o -> o != id && bk.store.any { y -> y.id == o && y.kind == "gunskin" && y.gun == r.gun } }
+        }
         prefs.putString("equipped", eq.joinToString(","))
         prefs.flush()
         return if (id in eq) "Equipped" else "Unequipped"
+    }
+    override fun equippedGunSkins(): List<GunSkin> {
+        val eq = prefs.getString("equipped", "").split(",")
+        val owned = ownedList()
+        return bk.store.filter { it.kind == "gunskin" && it.id in eq && it.id in owned && it.gun.isNotEmpty() }.mapNotNull { r ->
+            try { GunSkin(r.gun, Color.valueOf(r.body).let { Color.rgba8888(it) }, Color.valueOf(r.acc).let { Color.rgba8888(it) }) } catch (e: Throwable) { null }
+        }
     }
 
     // ---- Luck Royale ----
@@ -275,7 +308,7 @@ class LocalLobbyService(private val bk: Backend) : LobbyService {
         var r = java.util.Random().nextInt(pr.sumOf { it.weight })
         var k = 0
         while (r >= pr[k].weight) { r -= pr[k].weight; k++ }
-        addGold(pr[k].gold); addDia(pr[k].dia)
+        addGold(pr[k].gold); addDia(pr[k].dia); grant(pr[k].itemId)
         return "You won " + pr[k].name + "!"
     }
     override fun prizeNames(): List<String> = livePrizes().map { it.name }
@@ -298,7 +331,7 @@ class LocalLobbyService(private val bk: Backend) : LobbyService {
         if (id in done) return "Already claimed"
         prefs.putString("evDone", prefs.getString("evDone", "") + "," + id)
         prefs.flush()
-        addGold(e.gold); addDia(e.dia)
+        addGold(e.gold); addDia(e.dia); grant(e.itemId)
         return "Event reward claimed: ${e.title}"
     }
     override fun banned(): String? {

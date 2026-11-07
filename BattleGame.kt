@@ -315,6 +315,24 @@ class BattleGame : ApplicationAdapter() {
     private val evBots = FloatArray(16)
     private var reportSent = false
     private var matchId = ""
+    private val skinCur = HashMap<String, Array<Color>>()
+
+    /** recolours guns with the skins the player equipped (colours come from the admin panel) */
+    private fun applySkins(skins: List<GunSkin>) {
+        for (sp in gunSpecs()) {
+            val k = weapons.indexOfFirst { it.name == sp.name }
+            if (k < 0) continue
+            val sk = skins.firstOrNull { it.gun == sp.name }
+            val nb = if (sk != null) Color(sk.body) else Color(sp.body)
+            val na = if (sk != null) Color(sk.acc) else Color(sp.acc)
+            val cur = skinCur[sp.name] ?: arrayOf(Color(sp.body), Color(sp.acc))
+            for (pt in weaponProps[k].parts) {
+                val at = pt.inst.materials.get(0).get(ColorAttribute.Diffuse) as? ColorAttribute ?: continue
+                if (at.color == cur[0]) at.color.set(nb) else if (at.color == cur[1]) at.color.set(na)
+            }
+            skinCur[sp.name] = arrayOf(nb, na)
+        }
+    }
     private var lastReward = ""
     private var stance = 0          // 0 standing, 1 sitting/crouched, 2 prone
     private var eyeH = 1.7f
@@ -2040,6 +2058,7 @@ class BattleGame : ApplicationAdapter() {
             inLobby = false
             reported = false
             reportSent = false
+            applySkins(lb.svc.equippedGunSkins())
             ev.clear()
             lastAttacker = ""
             matchId = lobby?.svc?.myId() + "-" + System.currentTimeMillis()
