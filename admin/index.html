@@ -46,6 +46,10 @@ const $ = s => document.querySelector(s);
 let tab = "store";
 const tabs = { store: "Store", luck: "Luck Royale", pass: "Sohel Pass", missions: "Missions", events: "Events", reports: "Reports", bans: "Bans" };
 const GUNS = "USP,GLOCK 19,P320,M92FS,M1911,MP5,P90,VECTOR,SCORPION,MP7,M4A1,AK-47,SCAR-L,HK416,FAMAS,AUG A3,QBZ-95,AWM,BARRETT,M200,SVD,R700,G18C,VZ.61,MAC-10,DESERT EAGLE,M500".split(",");
+const imgField = (id, label) => `<div><label>${label}</label><input id="${id}" placeholder="https://.../picture.png"><img id="${id}p" style="max-width:100%;max-height:64px;margin-top:4px;border-radius:6px;display:none"></div>`;
+const setImg = (id, v) => { const i = $("#" + id); if (!i) return; i.value = v || ""; i.dispatchEvent(new Event("input")); };
+const wireImg = ids => ids.forEach(id => { const i = $("#" + id); if (!i) return; i.oninput = () => { const p = $("#" + id + "p"); p.style.display = i.value ? "block" : "none"; p.src = i.value; }; });
+const IMGHELP = `<p class="dim">Pictures: upload them to your GitHub repo folder <b>images/</b> (GitHub website &gt; Add file &gt; Upload files), then paste the link: <code>https://sohel-mohiddin-learn-islam.github.io/Sohelbr/images/NAME.png</code>. Keep them under ~1 MB. When you change a picture, give it a NEW file name (phones keep the old one). Leave empty for no picture.</p>`;
 const itemOpts = items => `<option value="">None</option>` + items.map(i => `<option value="${i.id}">${esc(i.name)} (${esc(i.kind)})</option>`).join("");
 const fmt = ms => ms ? new Date(ms).toLocaleString() : "-";
 const toMs = v => v ? new Date(v).getTime() : 0;
@@ -77,8 +81,8 @@ async function render() {
 async function luck() {
   const rows = await list("luck_items"), shop = await list("store_items");
   $("#main").innerHTML = `
-  <div class="card"><b>Add / edit prize</b><p class="dim">Active prizes inside their time window replace the built-in prize table. Leave end empty for no end. Weight = how often it drops (higher = more common).</p>
-  <div class="grid"><div><label>Ring name (group, e.g. Diwali Ring)</label><input id="ring" value="Lucky Ring"></div><div><label>Name (shown to players)</label><input id="n"></div><div><label>Gold</label><input id="g" type="number" value="0"></div>
+  <div class="card"><b>Add / edit prize</b><p class="dim">Active prizes inside their time window replace the built-in prize table. Leave end empty for no end. Weight = how often it drops (higher = more common).</p>${IMGHELP}
+  <div class="grid"><div><label>Ring name (group, e.g. Diwali Ring)</label><input id="ring" value="Lucky Ring"></div><div><label>Name (shown to players)</label><input id="n"></div>${imgField("im", "Prize icon URL")}${imgField("rim", "Ring banner URL (any prize of the ring)")}<div><label>Gold</label><input id="g" type="number" value="0"></div>
   <div><label>Diamonds</label><input id="d" type="number" value="0"></div><div><label>Weight</label><input id="w" type="number" value="10"></div>
   <div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div>
   <div><label>Also gives item (optional)</label><select id="it">${itemOpts(shop)}</select></div>
@@ -88,16 +92,17 @@ async function luck() {
   <div class="card"><table><tr><th>Prize</th><th>Gold</th><th>Dia</th><th>Weight</th><th>Window</th><th></th></tr>
   ${rows.map(r => `<tr><td>${esc(r.name)} <span class="${r.active ? "on" : "off"}">${r.active ? "active" : "off"}</span></td><td>${r.gold}</td><td>${r.dia}</td><td>${r.weight}</td>
   <td class="dim">${fmt(r.start)}<br>${r.end ? fmt(r.end) : "no end"}</td><td><button class="b g" data-edit="${r.id}">Edit</button><button class="b r" data-del="${r.id}">Delete</button></td></tr>`).join("") || "<tr><td class='dim'>No prizes yet - the game uses its built-in table.</td></tr>"}</table></div>`;
-  const clear = () => { ["n", "s", "e", "eid"].forEach(i => $("#" + i).value = ""); $("#g").value = 0; $("#d").value = 0; $("#w").value = 10; };
+  wireImg(["im", "rim"]);
+  const clear = () => { ["n", "s", "e", "eid"].forEach(i => $("#" + i).value = ""); setImg("im", ""); setImg("rim", ""); $("#g").value = 0; $("#d").value = 0; $("#w").value = 10; };
   $("#clr").onclick = clear;
   $("#save").onclick = async () => {
-    const data = { name: $("#n").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, weight: Math.max(1, +$("#w").value || 1), start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1", itemId: $("#it").value, ring: $("#ring").value.trim() || "Lucky Ring" };
+    const data = { name: $("#n").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, weight: Math.max(1, +$("#w").value || 1), start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1", itemId: $("#it").value, ring: $("#ring").value.trim() || "Lucky Ring", img: $("#im").value.trim(), ringImg: $("#rim").value.trim() };
     if (!data.name || (!data.gold && !data.dia && !data.itemId)) return alert("Give it a name and some gold, diamonds or an item");
     const id = $("#eid").value; id ? await setDoc(doc(db, "luck_items", id), data) : await addDoc(collection(db, "luck_items"), data); render();
   };
   $("#main").onclick = async e => {
     if (e.target.dataset.del && confirm("Delete this prize?")) { await deleteDoc(doc(db, "luck_items", e.target.dataset.del)); render(); }
-    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#n").value = r.name; $("#g").value = r.gold; $("#d").value = r.dia; $("#w").value = r.weight; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; $("#it").value = r.itemId || ""; $("#ring").value = r.ring || "Lucky Ring"; scrollTo(0, 0); }
+    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#n").value = r.name; $("#g").value = r.gold; $("#d").value = r.dia; $("#w").value = r.weight; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; $("#it").value = r.itemId || ""; $("#ring").value = r.ring || "Lucky Ring"; setImg("im", r.img); setImg("rim", r.ringImg); scrollTo(0, 0); }
   };
 }
 
@@ -105,8 +110,8 @@ async function luck() {
 async function events() {
   const rows = await list("events"), shop = await list("store_items");
   $("#main").innerHTML = `
-  <div class="card"><b>Add / edit event</b><p class="dim">Players see an event only while it is active and between start and end. Each player can claim its reward once.</p>
-  <div class="grid"><div><label>Title</label><input id="t"></div><div><label>Description</label><input id="ds"></div><div><label>Gold reward</label><input id="g" type="number" value="0"></div>
+  <div class="card"><b>Add / edit event</b><p class="dim">Players see an event only while it is active and between start and end. Each player can claim its reward once.</p>${IMGHELP}
+  <div class="grid"><div><label>Title</label><input id="t"></div>${imgField("im", "Event picture URL")}<div><label>Description</label><input id="ds"></div><div><label>Gold reward</label><input id="g" type="number" value="0"></div>
   <div><label>Diamond reward</label><input id="d" type="number" value="0"></div><div><label>Start</label><input id="s" type="datetime-local"></div><div><label>End</label><input id="e" type="datetime-local"></div>
   <div><label>Also gives item (optional)</label><select id="it">${itemOpts(shop)}</select></div>
   <div><label>Active</label><select id="a"><option value="1">Yes</option><option value="0">No</option></select></div></div>
@@ -114,15 +119,15 @@ async function events() {
   <div class="card"><table><tr><th>Event</th><th>Reward</th><th>Window</th><th></th></tr>
   ${rows.map(r => `<tr><td>${esc(r.title)} <span class="${r.active ? "on" : "off"}">${r.active ? "active" : "off"}</span><br><span class="dim">${esc(r.desc)}</span></td><td>${r.gold} gold, ${r.dia} dia</td>
   <td class="dim">${fmt(r.start)}<br>${r.end ? fmt(r.end) : "no end"}</td><td><button class="b g" data-edit="${r.id}">Edit</button><button class="b r" data-del="${r.id}">Delete</button></td></tr>`).join("") || "<tr><td class='dim'>No events yet.</td></tr>"}</table></div>`;
-  $("#clr").onclick = () => render();
+  wireImg(["im"]); $("#clr").onclick = () => render();
   $("#save").onclick = async () => {
-    const data = { title: $("#t").value.trim(), desc: $("#ds").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1", itemId: $("#it").value };
+    const data = { title: $("#t").value.trim(), desc: $("#ds").value.trim(), gold: +$("#g").value || 0, dia: +$("#d").value || 0, start: toMs($("#s").value), end: toMs($("#e").value), active: $("#a").value === "1", itemId: $("#it").value, img: $("#im").value.trim() };
     if (!data.title) return alert("Give it a title");
     const id = $("#eid").value; id ? await setDoc(doc(db, "events", id), data) : await addDoc(collection(db, "events"), data); render();
   };
   $("#main").onclick = async e => {
     if (e.target.dataset.del && confirm("Delete this event?")) { await deleteDoc(doc(db, "events", e.target.dataset.del)); render(); }
-    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#t").value = r.title; $("#ds").value = r.desc; $("#g").value = r.gold; $("#d").value = r.dia; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; $("#it").value = r.itemId || ""; scrollTo(0, 0); }
+    if (e.target.dataset.edit) { const r = rows.find(x => x.id === e.target.dataset.edit); $("#eid").value = r.id; $("#t").value = r.title; $("#ds").value = r.desc; $("#g").value = r.gold; $("#d").value = r.dia; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end); $("#a").value = r.active ? "1" : "0"; $("#it").value = r.itemId || ""; setImg("im", r.img); scrollTo(0, 0); }
   };
 }
 
@@ -133,8 +138,8 @@ async function store() {
     ? `${esc(r.gun)} <span style="background:${esc(r.body)};padding:0 10px;border-radius:4px">&nbsp;</span> <span style="background:${esc(r.acc)};padding:0 10px;border-radius:4px">&nbsp;</span>`
     : r.kind === "bundle" ? `${(r.contains || "").split(",").filter(Boolean).length} items, +${r.gold || 0} gold, +${r.diaBonus || 0} dia` : "-";
   $("#main").innerHTML = `
-  <div class="card"><b>Add / edit store item</b><p class="dim">Types: <b>Gun skin</b> recolours one gun (pick the gun and two colours). <b>Bundle</b> gives several items plus optional gold/diamonds. <b>Other</b> is a collectible/cosmetic name only. Choose "No (prize only)" for items that are only given as Luck Royale / Event prizes.</p>
-  <div class="grid"><div><label>Name</label><input id="n"></div>
+  <div class="card"><b>Add / edit store item</b><p class="dim">Types: <b>Gun skin</b> recolours one gun (pick the gun and two colours). <b>Bundle</b> gives several items plus optional gold/diamonds. <b>Other</b> is a collectible/cosmetic name only. Choose "No (prize only)" for items that are only given as Luck Royale / Event prizes.</p>${IMGHELP}
+  <div class="grid"><div><label>Name</label><input id="n"></div>${imgField("im", "Picture URL (card + preview)")}
   <div><label>Type</label><select id="k"><option value="gunskin">Gun skin</option><option value="bundle">Bundle</option><option value="other">Other / outfit</option></select></div>
   <div><label>Price</label><input id="p" type="number" value="100"></div>
   <div><label>Currency</label><select id="c"><option value="g">Gold</option><option value="d">Diamonds</option></select></div>
@@ -154,11 +159,11 @@ async function store() {
   const sync = () => { const k = $("#k").value; $("#gs").style.display = k === "gunskin" ? "grid" : "none"; $("#bd").style.display = k === "bundle" ? "block" : "none"; };
   const paint = () => { ["g1", "g2"].forEach(i => $("#" + i).style.background = $("#bc").value); ["g3", "g4"].forEach(i => $("#" + i).style.background = $("#ac").value); };
   $("#bc").oninput = paint; $("#ac").oninput = paint; paint();
-  $("#k").onchange = sync; sync(); $("#clr").onclick = () => render();
+  wireImg(["im"]); $("#k").onchange = sync; sync(); $("#clr").onclick = () => render();
   $("#save").onclick = async () => {
     const k = $("#k").value;
     const data = { name: $("#n").value.trim(), kind: k, price: +$("#p").value || 0, currency: $("#c").value, shop: $("#sh").value === "1", active: $("#a").value === "1", start: toMs($("#s").value), end: toMs($("#e").value),
-      gun: k === "gunskin" ? $("#gun").value : "", body: $("#bc").value, acc: $("#ac").value, gold: k === "bundle" ? +$("#bg").value || 0 : 0, diaBonus: k === "bundle" ? +$("#bdm").value || 0 : 0,
+      img: $("#im").value.trim(), gun: k === "gunskin" ? $("#gun").value : "", body: $("#bc").value, acc: $("#ac").value, gold: k === "bundle" ? +$("#bg").value || 0 : 0, diaBonus: k === "bundle" ? +$("#bdm").value || 0 : 0,
       contains: k === "bundle" ? [...document.querySelectorAll(".ct:checked")].map(x => x.value).join(",") : "" };
     if (!data.name) return alert("Give it a name");
     if (k === "bundle" && !data.contains && !data.gold && !data.diaBonus) return alert("A bundle needs items or a bonus");
@@ -168,7 +173,7 @@ async function store() {
     if (e.target.dataset.del && confirm("Delete this item?")) { await deleteDoc(doc(db, "store_items", e.target.dataset.del)); render(); }
     if (e.target.dataset.edit) {
       const r = rows.find(x => x.id === e.target.dataset.edit);
-      $("#eid").value = r.id; $("#n").value = r.name; $("#k").value = r.kind; sync(); $("#p").value = r.price; $("#c").value = r.currency || "g"; $("#sh").value = r.shop === false ? "0" : "1";
+      $("#eid").value = r.id; $("#n").value = r.name; setImg("im", r.img); $("#k").value = r.kind; sync(); $("#p").value = r.price; $("#c").value = r.currency || "g"; $("#sh").value = r.shop === false ? "0" : "1";
       $("#a").value = r.active ? "1" : "0"; $("#s").value = toLocal(r.start); $("#e").value = toLocal(r.end);
       if (r.gun) $("#gun").value = r.gun; $("#bc").value = r.body || "#c0392b"; $("#ac").value = r.acc || "#f1c40f"; $("#bg").value = r.gold || 0; $("#bdm").value = r.diaBonus || 0;
       const ids = (r.contains || "").split(","); document.querySelectorAll(".ct").forEach(x => x.checked = ids.includes(x.value)); scrollTo(0, 0);
@@ -189,15 +194,16 @@ async function pass() {
   $("#main").innerHTML = `<h2>Sohel Pass</h2>
   <div class="card"><div class="grid"><div><label>Season title</label><input id="pt" value="${esc(cfg.title || "SOHEL PASS")}"></div>
   <div><label>Ends</label><input id="pe" type="datetime-local" value="${toLocal(cfg.end)}"></div>
-  <div><label>Premium price (diamonds)</label><input id="pp" type="number" value="${cfg.price || 150}"></div></div>
+  <div><label>Premium price (diamonds)</label><input id="pp" type="number" value="${cfg.price || 150}"></div>${imgField("im", "Pass background picture URL (full screen, ~1920x900)")}</div>${IMGHELP}
   <p class="dim">Each level needs 100 pass XP. The LAST level is shown as the big "grand reward" card. Max 30 levels. Rewards can include a store item (skin / bundle).</p></div>
   <div class="card"><table id="pt2"><tr><th>Lv</th><th>FREE gold</th><th>FREE dia</th><th>FREE item</th><th>PREMIUM gold</th><th>PREMIUM dia</th><th>PREMIUM item</th><th></th></tr>
   ${lv.map((r, i) => prow(r, i + 1)).join("")}</table>
   <button class="b g" id="add">+ Add level</button><button class="b" id="save">Save pass</button></div>`;
   const read = () => [...document.querySelectorAll("#pt2 tr")].slice(1).map(tr => { const v = [...tr.querySelectorAll("input,select")].map(x => x.value); return { fg: +v[0] || 0, fd: +v[1] || 0, fi: v[2], pg: +v[3] || 0, pd: +v[4] || 0, pi: v[5] }; });
+  wireImg(["im"]); setImg("im", cfg.img);
   $("#add").onclick = () => { if (document.querySelectorAll("#pt2 tr").length > 30) return alert("Max 30 levels"); $("#pt2").insertAdjacentHTML("beforeend", prow({ fg: 50, fd: 0, fi: "", pg: 0, pd: 5, pi: "" }, document.querySelectorAll("#pt2 tr").length)); };
   $("#main").onclick = e => { if (e.target.classList.contains("rm")) { e.target.closest("tr").remove(); [...document.querySelectorAll("#pt2 tr")].slice(1).forEach((tr, i) => tr.firstElementChild.textContent = i + 1); } };
-  $("#save").onclick = async () => { await setDoc(doc(db, "config", "pass"), { title: $("#pt").value.trim() || "SOHEL PASS", end: toMs($("#pe").value), price: +$("#pp").value || 150, levels: JSON.stringify(read()) }); alert("Pass saved"); render(); };
+  $("#save").onclick = async () => { await setDoc(doc(db, "config", "pass"), { title: $("#pt").value.trim() || "SOHEL PASS", end: toMs($("#pe").value), price: +$("#pp").value || 150, levels: JSON.stringify(read()), img: $("#im").value.trim() }); alert("Pass saved"); render(); };
 }
 // ---------- MISSIONS ----------
 async function missions() {

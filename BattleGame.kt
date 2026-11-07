@@ -2022,7 +2022,7 @@ class BattleGame : ApplicationAdapter() {
     }
 
     private fun renderLobby(w: Float, h: Float, dt: Float) {
-        val lb = lobby ?: Lobby(font, sb, shapes, LocalLobbyService(backend)).also { lobby = it; backend.refresh(it.svc.myId()) }
+        val lb = lobby ?: Lobby(font, sb, shapes, LocalLobbyService(backend), backend.images).also { lobby = it; backend.refresh(it.svc.myId()) }
         Gdx.gl.glViewport(0, 0, Gdx.graphics.width, Gdx.graphics.height)
         Gdx.gl.glClearColor(0.05f, 0.08f, 0.12f, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)

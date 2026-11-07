@@ -16,16 +16,61 @@ object BackendConfig {
     const val DB = "(default)"
 }
 
-class RemotePrize(val name: String, val gold: Int, val dia: Int, val weight: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "", val ring: String = "")
-class RemoteEvent(val id: String, val title: String, val desc: String, val gold: Int, val dia: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "")
+class RemotePrize(val name: String, val gold: Int, val dia: Int, val weight: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "", val ring: String = "", val img: String = "", val ringImg: String = "")
+class RemoteEvent(val id: String, val title: String, val desc: String, val gold: Int, val dia: Int, val start: Long, val end: Long, val active: Boolean, val itemId: String = "", val img: String = "")
 
 class PassLevel(val fg: Int, val fd: Int, val fi: String, val pg: Int, val pd: Int, val pi: String)
-class PassConfig(val title: String, val end: Long, val price: Int, val levels: List<PassLevel>)
+class PassConfig(val title: String, val end: Long, val price: Int, val levels: List<PassLevel>, val img: String = "")
 class MissionCfg(val title: String, val kind: String, val goal: Int, val weekly: Boolean, val gold: Int, val dia: Int, val xp: Int, val itemId: String)
 
 /** shop item made in the admin panel: kind = gunskin / bundle / other */
 class RemoteItem(val id: String, val name: String, val kind: String, val price: Int, val dia: Boolean, val gun: String, val body: String, val acc: String,
-                 val contains: List<String>, val gold: Int, val diaBonus: Int, val start: Long, val end: Long, val active: Boolean, val shop: Boolean)
+                 val contains: List<String>, val gold: Int, val diaBonus: Int, val start: Long, val end: Long, val active: Boolean, val shop: Boolean, val img: String = "")
+
+/** Downloads pictures (from the URLs you type in the admin panel) once, keeps them on the phone, and hands out textures. Call get() from the render thread. */
+class ImageLoader {
+    private val tex = HashMap<String, com.badlogic.gdx.graphics.Texture>()
+    private val asked = HashSet<String>()
+    private val ready = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, ByteArray>>()
+
+    private fun cacheFile(url: String) = Gdx.files.local("imgcache/" + url.hashCode().toString(16) + ".img")
+
+    fun get(url: String): com.badlogic.gdx.graphics.Texture? {
+        if (url.isBlank()) return null
+        while (true) {
+            val p = ready.poll() ?: break
+            try {
+                val pm = com.badlogic.gdx.graphics.Pixmap(p.second, 0, p.second.size)
+                val t = com.badlogic.gdx.graphics.Texture(pm)
+                t.setFilter(com.badlogic.gdx.graphics.Texture.TextureFilter.Linear, com.badlogic.gdx.graphics.Texture.TextureFilter.Linear)
+                tex[p.first] = t
+                pm.dispose()
+            } catch (e: Throwable) { }
+        }
+        tex[url]?.let { return it }
+        if (asked.add(url)) {
+            val f = cacheFile(url)
+            var loaded = false
+            if (f.exists()) try { ready.add(Pair(url, f.readBytes())); loaded = true } catch (e: Throwable) { }
+            if (!loaded && url.startsWith("http")) {
+                val rq = Net.HttpRequest("GET")
+                rq.url = url
+                rq.timeOut = 15000
+                Gdx.net.sendHttpRequest(rq, object : Net.HttpResponseListener {
+                    override fun handleHttpResponse(r: Net.HttpResponse) {
+                        if (r.status.statusCode == 200) try {
+                            val b = r.result
+                            if (b != null && b.isNotEmpty()) { try { f.writeBytes(b, false) } catch (e: Throwable) { }; ready.add(Pair(url, b)) }
+                        } catch (e: Throwable) { }
+                    }
+                    override fun failed(t: Throwable) { asked.remove(url) }
+                    override fun cancelled() { asked.remove(url) }
+                })
+            }
+        }
+        return null
+    }
+}
 
 /** Last ~45 seconds of play (positions, shots, hits, damage taken) - attached to a player report so the admin can replay it. */
 class Evidence {
@@ -80,6 +125,7 @@ class Backend {
     @Volatile var banReason = ""
     @Volatile var banUntil = 0L
     @Volatile private var token: String? = null
+    val images = ImageLoader()
 
     private fun base() = "https://firestore.googleapis.com/v1/projects/${BackendConfig.PROJECT_ID}/databases/${BackendConfig.DB}/documents"
 
@@ -110,7 +156,7 @@ class Backend {
                 val docs = JsonReader().parse(txt).get("documents")
                 if (docs != null) for (d in docs) {
                     val f = d.get("fields") ?: continue
-                    out.add(RemotePrize(s(f, "name"), n(f, "gold").toInt(), n(f, "dia").toInt(), maxOf(1, n(f, "weight").toInt()), n(f, "start"), n(f, "end"), b(f, "active"), s(f, "itemId"), s(f, "ring")))
+                    out.add(RemotePrize(s(f, "name"), n(f, "gold").toInt(), n(f, "dia").toInt(), maxOf(1, n(f, "weight").toInt()), n(f, "start"), n(f, "end"), b(f, "active"), s(f, "itemId"), s(f, "ring"), s(f, "img"), s(f, "ringImg")))
                 }
                 luck = out
             } catch (e: Throwable) { }
@@ -122,7 +168,7 @@ class Backend {
                 if (docs != null) for (d in docs) {
                     val f = d.get("fields") ?: continue
                     val id = d.getString("name", "").substringAfterLast('/')
-                    out.add(RemoteEvent(id, s(f, "title"), s(f, "desc"), n(f, "gold").toInt(), n(f, "dia").toInt(), n(f, "start"), n(f, "end"), b(f, "active"), s(f, "itemId")))
+                    out.add(RemoteEvent(id, s(f, "title"), s(f, "desc"), n(f, "gold").toInt(), n(f, "dia").toInt(), n(f, "start"), n(f, "end"), b(f, "active"), s(f, "itemId"), s(f, "img")))
                 }
                 events = out
             } catch (e: Throwable) { }
@@ -135,7 +181,7 @@ class Backend {
                     val f = d.get("fields") ?: continue
                     val id = d.getString("name", "").substringAfterLast('/')
                     out.add(RemoteItem(id, s(f, "name"), s(f, "kind"), n(f, "price").toInt(), s(f, "currency") == "d", s(f, "gun"), s(f, "body"), s(f, "acc"),
-                        s(f, "contains").split(",").filter { it.isNotBlank() }, n(f, "gold").toInt(), n(f, "diaBonus").toInt(), n(f, "start"), n(f, "end"), b(f, "active"), f.get("shop") == null || b(f, "shop")))
+                        s(f, "contains").split(",").filter { it.isNotBlank() }, n(f, "gold").toInt(), n(f, "diaBonus").toInt(), n(f, "start"), n(f, "end"), b(f, "active"), f.get("shop") == null || b(f, "shop"), s(f, "img")))
                 }
                 store = out
             } catch (e: Throwable) { }
@@ -147,7 +193,7 @@ class Backend {
                     val lv = ArrayList<PassLevel>()
                     val arr = JsonReader().parse(s(f, "levels"))
                     for (c in arr) lv.add(PassLevel(c.getInt("fg", 0), c.getInt("fd", 0), c.getString("fi", ""), c.getInt("pg", 0), c.getInt("pd", 0), c.getString("pi", "")))
-                    if (lv.isNotEmpty()) pass = PassConfig(s(f, "title").ifEmpty { "SOHEL PASS" }, n(f, "end"), n(f, "price").toInt().let { if (it <= 0) 150 else it }, lv.take(30))
+                    if (lv.isNotEmpty()) pass = PassConfig(s(f, "title").ifEmpty { "SOHEL PASS" }, n(f, "end"), n(f, "price").toInt().let { if (it <= 0) 150 else it }, lv.take(30), s(f, "img"))
                 }
             } catch (e: Throwable) { }
         }

@@ -15,12 +15,12 @@ class Msg(val time: String, val text: String, var read: Boolean)
 class Mission(val title: String, val goal: Int, val progress: Int, val gold: Int, val dia: Int, val xp: Int, val claimed: Boolean)
 /** kind: 0 gold, 1 diamonds, 2 item */
 class PassRow(val level: Int, val free: String, val prem: String, val freeKind: Int, val premKind: Int, val unlocked: Boolean, val freeDone: Boolean, val premDone: Boolean)
-class PassInfo(val title: String, val endMs: Long, val price: Int)
-class GameEvent(val id: String, val title: String, val desc: String, val reward: String, val claimed: Boolean)
+class PassInfo(val title: String, val endMs: Long, val price: Int, val img: String = "")
+class GameEvent(val id: String, val title: String, val desc: String, val reward: String, val claimed: Boolean, val img: String = "")
 class GunSkin(val gun: String, val body: Int, val acc: Int)
 class StoreItem(val id: String, val name: String, val price: Int, val dia: Boolean, val owned: Boolean, val equipped: Boolean,
-                val kind: String = "other", val gun: String = "", val body: Int = 0x5a6b4aff, val acc: Int = 0x2a2a2aff, val info: String = "")
-class PrizeInfo(val name: String, val ring: String, val gold: Int, val dia: Int, val weight: Int, val endMs: Long, val item: Boolean)
+                val kind: String = "other", val gun: String = "", val body: Int = 0x5a6b4aff, val acc: Int = 0x2a2a2aff, val info: String = "", val img: String = "")
+class PrizeInfo(val name: String, val ring: String, val gold: Int, val dia: Int, val weight: Int, val endMs: Long, val item: Boolean, val img: String = "", val ringImg: String = "")
 
 /**
  * Everything the lobby needs from "the outside world". Today it is answered by [LocalLobbyService]
@@ -241,7 +241,7 @@ class LocalLobbyService(private val bk: Backend) : LobbyService {
     private fun levels(): List<PassLevel> = bk.pass?.levels ?: (1..20).map { l ->
         PassLevel(if (l % 5 == 0) 0 else 50 + 10 * l, if (l % 5 == 0) 10 else 0, "", 0, if (l % 5 == 0) 40 else 5, "")
     }
-    override fun passInfo(): PassInfo { val p = bk.pass; return PassInfo(p?.title ?: "SOHEL PASS", p?.end ?: 0L, p?.price ?: 150) }
+    override fun passInfo(): PassInfo { val p = bk.pass; return PassInfo(p?.title ?: "SOHEL PASS", p?.end ?: 0L, p?.price ?: 150, p?.img ?: "") }
     override fun passLevel() = minOf(levels().size, gi("pxp") / 100)
     override fun passXp() = gi("pxp") % 100
     override fun passProgress() = if (passLevel() >= levels().size) 1f else (gi("pxp") % 100) / 100f
@@ -294,7 +294,7 @@ class LocalLobbyService(private val bk: Backend) : LobbyService {
                 "gunskin" -> "Recolours the ${r.gun}"
                 else -> "Cosmetic item"
             }
-            out.add(StoreItem(r.id, r.name, r.price, r.dia, r.id in owned, r.id in eq, r.kind, r.gun, colorInt(r.body, 0xc0392bff.toInt()), colorInt(r.acc, 0xf1c40fff.toInt()), info))
+            out.add(StoreItem(r.id, r.name, r.price, r.dia, r.id in owned, r.id in eq, r.kind, r.gun, colorInt(r.body, 0xc0392bff.toInt()), colorInt(r.acc, 0xf1c40fff.toInt()), info, r.img))
         }
         return out
     }
@@ -338,7 +338,7 @@ class LocalLobbyService(private val bk: Backend) : LobbyService {
         return if (l.isEmpty()) defaultPrizes else l
     }
     private fun ringOf(p: RemotePrize) = if (p.ring.isBlank()) "Lucky Ring" else p.ring
-    override fun prizes(): List<PrizeInfo> = livePrizes().map { PrizeInfo(it.name, ringOf(it), it.gold, it.dia, it.weight, it.end, it.itemId.isNotEmpty()) }
+    override fun prizes(): List<PrizeInfo> = livePrizes().map { PrizeInfo(it.name, ringOf(it), it.gold, it.dia, it.weight, it.end, it.itemId.isNotEmpty(), it.img, it.ringImg) }
     override fun spinIsFree() = gi("lastSpin") != today() + 1
     override fun lastWon(): List<String> = won
     override fun spin(ring: String, times: Int): String {
@@ -370,7 +370,7 @@ class LocalLobbyService(private val bk: Backend) : LobbyService {
         val done = prefs.getString("evDone", "").split(",")
         return liveEvents().map { e ->
             val rw = (if (e.gold > 0) "${e.gold} Gold " else "") + (if (e.dia > 0) "${e.dia} Diamonds" else "")
-            GameEvent(e.id, e.title, e.desc, rw.trim(), e.id in done)
+            GameEvent(e.id, e.title, e.desc, rw.trim(), e.id in done, e.img)
         }
     }
     override fun claimEvent(id: String): String {
@@ -412,8 +412,11 @@ class LocalLobbyService(private val bk: Backend) : LobbyService {
 }
 
 /** The main menu (Free Fire style): character, wallet, menus, friends, modes, START, and the full-screen Store / Luck Royale / Pass / Missions pages. */
-class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private val shapes: ShapeRenderer, val svc: LobbyService) {
+class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private val shapes: ShapeRenderer, val svc: LobbyService, private val images: ImageLoader) {
     private class Box(val id: Int, val x: Float, val y: Float, val w: Float, val h: Float, val c: Color, val hex: Boolean = false)
+    private class Img(val url: String, val x: Float, val y: Float, val w: Float, val h: Float)
+    private val imgs = ArrayList<Img>()
+    private val bgImgs = ArrayList<Img>()
     private class Txt(val s: String, val x: Float, val y: Float, val scale: Float, val c: Color, val bw: Float, val bh: Float)
 
     private val layout = GlyphLayout()
@@ -462,6 +465,8 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
         ctext(s, x, y, w, h, scale, tc)
     }
     private fun rgba(v: Int) = Color(v)
+    private fun img(url: String, x: Float, y: Float, w: Float, h: Float) { if (url.isNotBlank()) imgs.add(Img(url, x, y, w, h)) }
+    private fun bgImg(url: String, x: Float, y: Float, w: Float, h: Float) { if (url.isNotBlank()) bgImgs.add(Img(url, x, y, w, h)) }
     private fun left(ms: Long): String {
         if (ms <= 0L) return ""
         val d = (ms - System.currentTimeMillis()) / 1000
@@ -509,6 +514,8 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
 
         boxes.clear()
         texts.clear()
+        imgs.clear()
+        bgImgs.clear()
         val m = w * 0.02f
         val friends = svc.friends()
         val unread = svc.unread()
@@ -523,6 +530,12 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
         }
 
         // ---- render ----
+        if (bgImgs.isNotEmpty()) {
+            sb.begin()
+            sb.setColor(1f, 1f, 1f, 1f)
+            for (im in bgImgs) { val tx0 = images.get(im.url); if (tx0 != null) sb.draw(tx0, im.x, h - im.y - im.h, im.w, im.h) }
+            sb.end()
+        }
         shapes.begin(ShapeRenderer.ShapeType.Filled)
         for (b in boxes) {
             shapes.setColor(b.c)
@@ -531,6 +544,8 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
         }
         shapes.end()
         sb.begin()
+        sb.setColor(1f, 1f, 1f, 1f)
+        for (im in imgs) { val tx1 = images.get(im.url); if (tx1 != null) sb.draw(tx1, im.x, h - im.y - im.h, im.w, im.h) }
         for (tx in texts) {
             font.data.setScale(tx.scale)
             font.setColor(tx.c)
@@ -672,8 +687,11 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
 
     private fun buildScreen(w: Float, h: Float) {
         val top = h * 0.085f
-        box(-1, 0f, top, w, h - top, pageBg)
-        box(-1, w * 0.58f, top, w * 0.42f, h - top, Color(0.45f, 0.18f, 0.05f, 0.3f))
+        val passBg = if (screen == 3) svc.passInfo().img else ""
+        if (passBg.isEmpty()) {
+            box(-1, 0f, top, w, h - top, pageBg)
+            box(-1, w * 0.58f, top, w * 0.42f, h - top, Color(0.45f, 0.18f, 0.05f, 0.3f))
+        } else bgImg(passBg, 0f, top, w, h - top)
         text(titles[screen], w * 0.66f, h * 0.02f, 1.8f, white)
         button(90, "X", w - h * 0.1f, 0f, h * 0.1f, h * 0.085f, red, 1.6f)
         when (screen) {
@@ -718,8 +736,9 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
             if (it.id == sel) box(-1, cx - 4f, cy - 4f, cw + 8f, ch + 8f, gold)
             box(300 + i, cx, cy, cw, ch, rgba(it.body))
             box(-1, cx, cy + ch * 0.62f, cw, ch * 0.38f, Color(0f, 0f, 0f, 0.6f))
-            if (it.kind == "gunskin") { box(-1, cx + cw * 0.12f, cy + ch * 0.28f, cw * 0.76f, ch * 0.1f, rgba(it.acc)); box(-1, cx + cw * 0.15f, cy + ch * 0.38f, cw * 0.14f, ch * 0.12f, black) }
-            if (it.kind == "bundle") ctext("BUNDLE", cx, cy + ch * 0.1f, cw, ch * 0.3f, 1.6f, white)
+            img(it.img, cx, cy, cw, ch * 0.62f)
+            if (it.kind == "gunskin" && it.img.isEmpty()) { box(-1, cx + cw * 0.12f, cy + ch * 0.28f, cw * 0.76f, ch * 0.1f, rgba(it.acc)); box(-1, cx + cw * 0.15f, cy + ch * 0.38f, cw * 0.14f, ch * 0.12f, black) }
+            if (it.kind == "bundle" && it.img.isEmpty()) ctext("BUNDLE", cx, cy + ch * 0.1f, cw, ch * 0.3f, 1.6f, white)
             text(it.name.take(18), cx + 10f, cy + ch * 0.66f, 1.0f, white)
             text(if (it.price == 0) "FREE" else "${it.price} " + (if (it.dia) "DIA" else "GOLD"), cx + 10f, cy + ch * 0.82f, 1.0f, if (it.dia) cyan else gold)
             if (it.owned) { box(-1, cx, cy, cw * 0.4f, ch * 0.12f, green); ctext("OWNED", cx, cy, cw * 0.4f, ch * 0.12f, 0.8f, white) }
@@ -739,7 +758,9 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
         text(when (it.kind) { "gunskin" -> "GUN SKIN - " + it.gun; "bundle" -> "BUNDLE"; else -> "COLLECTION" }, px, h * 0.11f + 52f, 1.2f, dim)
         val body = rgba(it.body)
         val acc = rgba(it.acc)
-        if (it.kind == "gunskin") {
+        if (it.img.isNotEmpty()) {
+            img(it.img, px, h * 0.2f, pw, h * 0.42f)
+        } else if (it.kind == "gunskin") {
             box(-1, px + pw * 0.04f, h * 0.36f, pw * 0.1f, h * 0.07f, body)
             box(-1, px + pw * 0.12f, h * 0.35f, pw * 0.62f, h * 0.1f, body)
             box(-1, px + pw * 0.12f, h * 0.35f, pw * 0.62f, h * 0.025f, acc)
@@ -774,7 +795,8 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
             val lt = left(all.filter { it.ring == r && it.endMs > 0 }.minOfOrNull { it.endMs } ?: 0L)
             if (lt.isNotEmpty()) text(lt, w * 0.025f, y + h * 0.065f, 0.9f, if (i == ringSel) black else dim)
         }
-        text(ring.uppercase().take(20), w * 0.24f, h * 0.1f, 2.6f, gold)
+        val banner = all.firstOrNull { it.ring == ring && it.ringImg.isNotEmpty() }?.ringImg ?: ""
+        if (banner.isNotEmpty()) img(banner, w * 0.24f, h * 0.09f, w * 0.3f, h * 0.1f) else text(ring.uppercase().take(20), w * 0.24f, h * 0.1f, 2.6f, gold)
         val prizes = all.filter { it.ring == ring }.sortedBy { it.weight }.take(14)
         val ax = w * 0.24f
         val ay = h * 0.2f
@@ -789,7 +811,8 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
             val win = spinT <= 0f && spinNames.isNotEmpty() && p.name == spinNames.last()
             val c = if (i == hiIdx || win) Color(1f, 1f, 1f, 1f) else if (rare) Color(0.85f, 0.6f, 0.1f, 1f) else Color(0.5f, 0.52f, 0.58f, 1f)
             hex(-1, cx - d / 2f, cy - d / 2f, d, c)
-            ctext(p.name.take(12), cx - d / 2f, cy - d / 2f, d, d, if (rare) 0.9f else 0.75f, if (i == hiIdx || win) black else white)
+            if (p.img.isNotEmpty()) img(p.img, cx - d * 0.36f, cy - d * 0.36f, d * 0.72f, d * 0.72f)
+            else ctext(p.name.take(12), cx - d / 2f, cy - d / 2f, d, d, if (rare) 0.9f else 0.75f, if (i == hiIdx || win) black else white)
         }
         val free = svc.spinIsFree()
         button(400, if (free) "FREE SPIN" else "1 SPIN  20 DIA", w * 0.24f, h * 0.84f, w * 0.17f, h * 0.12f, Color(0.15f, 0.55f, 0.9f, 1f), 1.5f)
@@ -910,6 +933,7 @@ class Lobby(private val font: BitmapFont, private val sb: SpriteBatch, private v
             val e = evs[k]
             val ry = h * 0.12f + (k + 1) * (rowH + 10f)
             box(-1, rx, ry, rw, rowH, row)
+            img(e.img, rx + rw - w * 0.16f - 20f - rowH * 1.7f, ry + 6f, rowH * 1.7f, rowH - 12f)
             text(e.title.take(28), rx + 14f, ry + 10f, 1.6f, white)
             text(e.desc.take(70) + "   Reward: " + e.reward, rx + 14f, ry + rowH * 0.6f, 1.0f, gold)
             button(810 + k, if (e.claimed) "CLAIMED" else "CLAIM", rx + rw - w * 0.16f - 10f, ry + 12f, w * 0.16f, rowH - 24f, if (e.claimed) locked else green, 1.3f)
