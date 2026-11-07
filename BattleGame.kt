@@ -35,6 +35,7 @@ import com.badlogic.gdx.graphics.g3d.utils.TextureProvider
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.math.Intersector
 import com.badlogic.gdx.math.Matrix4
+import com.badlogic.gdx.math.Quaternion
 import com.badlogic.gdx.math.Vector3
 import com.badlogic.gdx.math.collision.BoundingBox
 import com.badlogic.gdx.math.collision.Ray
@@ -69,6 +70,12 @@ class Bot(val gender: Int, val outfit: Int, val pos: Vector3, var hp: Float = 20
 
 class Actor(val inst: ModelInstance, val ctrl: AnimationController, val g: Int) {
     var cur = ""
+    // gun draw / holster / switch animation
+    var ready = false
+    var lastHeld = -1
+    var swFrom = -1
+    var swT = 1f
+    var handT = 0f
     var hand: Node? = null
     var spine: Node? = null
 }
@@ -556,42 +563,98 @@ class BattleGame : ApplicationAdapter() {
     private val vy = Vector3()
     private val vz = Vector3()
 
-    private fun drawActor(a: Actor, x: Float, y: Float, z: Float, yawDeg: Float, held: Int, back: Int, armed: Boolean, fire: Boolean, pk: Int = 0) {
+    private fun drawActor(a: Actor, x: Float, y: Float, z: Float, yawDeg: Float, held: Int, back: Int, armed: Boolean, fire: Boolean, pk: Int = 0, rl: Float = -1f) {
         a.inst.transform.setToTranslation(x, y, z).rotate(Vector3.Y, yawDeg)
         batch.render(a.inst, env)
-        carry(a, held, back, armed, fire, pk)
+        carry(a, held, back, armed, fire, pk, rl)
     }
 
-    // guns are slung on the back (like Free Fire); the current gun comes into the hands while shooting.
-    // Everything follows the animated bones (hand_r and spine_03).
-    private fun carry(a: Actor, held: Int, back: Int, armed: Boolean, fire: Boolean, pk: Int = 0) {
+    private val mqa = Quaternion()
+    private val mqb = Quaternion()
+    private val mpa = Vector3()
+    private val mpb = Vector3()
+    private val msa = Vector3()
+    private val msb = Vector3()
+
+    private fun ease(t: Float): Float = t * t * (3f - 2f * t)
+
+    /** smooth move of a gun from transform m1 to m2 (with a small lift on the way, like lifting it over the shoulder) */
+    private fun mix(m1: Matrix4, m2: Matrix4, t: Float, lift: Float): Matrix4 {
+        m1.getTranslation(mpa); m2.getTranslation(mpb)
+        m1.getRotation(mqa, true); m2.getRotation(mqb, true)
+        m1.getScale(msa); m2.getScale(msb)
+        mpa.lerp(mpb, t)
+        mqa.slerp(mqb, t)
+        msa.lerp(msb, t)
+        mpa.y += lift * sin(t * 3.1415927f)
+        return Matrix4().set(mpa, mqa, msa)
+    }
+
+    // where a gun sits when it is in the hand (follows the animated hand bone)
+    private fun handMatrix(a: Actor, mt: ActorMeta, type: Int): Matrix4? {
+        val hn = a.hand ?: return null
+        val rel = Matrix4(hn.globalTransform).mul(mt.handAimInv)
+        vz.set(0f, 0f, -1f)
+        vy.set(0f, 1f, 0f)
+        vx.set(vy).crs(vz)
+        val sc = holdScale[type]
+        val gm = Matrix4(a.inst.transform).mul(rel).translate(mt.G).mul(Matrix4().set(vx, vy, vz, Vector3.Zero))
+        gm.scale(sc, sc, sc).translate(0f, -(gripY[type] + 0.02f), -gripZ[type])
+        return gm
+    }
+
+    // Guns are slung on the back (like Free Fire). Drawing, holstering and switching glide the gun between
+    // the back and the hand instead of jumping, and reloading tilts the gun toward the body.
+    private fun carry(a: Actor, held: Int, back: Int, armed: Boolean, fire: Boolean, pk: Int = 0, rl: Float = -1f) {
         val mt = meta[a.g] ?: return
         val base = a.inst.transform
-        var s1 = back
-        var s2 = -1
-        val hn = a.hand
-        val sn = a.spine
-        if (armed && isGun(held) && hn != null) {
-            val rel = Matrix4(hn.globalTransform).mul(mt.handAimInv)
-            vz.set(0f, 0f, -1f)
-            vy.set(0f, 1f, 0f)
-            vx.set(vy).crs(vz)
-            val s = holdScale[held]
-            val gm = Matrix4(base).mul(rel).translate(mt.G).mul(Matrix4().set(vx, vy, vz, Vector3.Zero))
-            gm.scale(s, s, s).translate(0f, -(gripY[held] + 0.02f), -gripZ[held])
-            drawProp(tpProps[held], gm)
-            if (fire) {
-                val fb = Matrix4(gm).translate(0f, weapons[held].muzzleY, weapons[held].muzzleZ - 0.04f)
-                drawProp(flashProp, fb)
-            }
-        } else {
-            s1 = held
-            s2 = back
+        val dt = minOf(Gdx.graphics.deltaTime, 0.05f)
+        val wantHand = armed && isGun(held)
+        if (!a.ready) {
+            a.ready = true
+            a.lastHeld = held
+            a.handT = if (wantHand) 1f else 0f
         }
-        if (sn != null) {
-            val sRel = Matrix4(base).mul(Matrix4(sn.globalTransform).mul(mt.spineInv))
-            if (isGun(s1)) slung(sRel, mt.B, s1, 0)
-            if (isGun(s2)) slung(sRel, mt.B, s2, 1)
+        if (held != a.lastHeld) {
+            a.swFrom = a.lastHeld
+            a.swT = 0f
+            a.lastHeld = held
+        }
+        if (a.swT < 1f) a.swT = minOf(1f, a.swT + dt / 0.42f)
+        a.handT = (a.handT + (if (wantHand) dt else -dt) / 0.30f).coerceIn(0f, 1f)
+
+        val sn = a.spine
+        val sRel = if (sn != null) Matrix4(base).mul(Matrix4(sn.globalTransform).mul(mt.spineInv)) else null
+        val ht = ease(a.handT)
+        val st = ease(a.swT)
+        val swapping = a.swT < 1f && wantHand && isGun(a.swFrom) && a.swFrom != held
+
+        if (isGun(held)) {
+            val sl = if (sRel != null) slungMatrix(sRel, mt.B, held, 0) else null
+            val h = handMatrix(a, mt, held)
+            if (h != null && rl >= 0f && wantHand) {
+                val r = sin(rl * 3.1415927f)
+                h.translate(0f, -0.04f * r, 0.07f * r).rotate(Vector3.X, 32f * r).rotate(Vector3.Z, 18f * r)
+            }
+            val t = if (swapping) st else ht
+            val m = if (h != null && sl != null) mix(sl, h, t, 0.25f) else (h ?: sl)
+            if (m != null) {
+                drawProp(tpProps[held], m)
+                if (fire && wantHand && t > 0.9f) {
+                    val fb = Matrix4(m).translate(0f, weapons[held].muzzleY, weapons[held].muzzleZ - 0.04f)
+                    drawProp(flashProp, fb)
+                }
+            }
+        }
+        if (sRel != null) {
+            // the gun that was just put away travels back over the shoulder
+            if (swapping) {
+                val oh = handMatrix(a, mt, a.swFrom)
+                if (oh != null) drawProp(tpProps[a.swFrom], mix(oh, slungMatrix(sRel, mt.B, a.swFrom, 0), st, 0.25f))
+            }
+            if (isGun(back) && !(swapping && back == a.swFrom)) {
+                drawProp(tpProps[back], mix(slungMatrix(sRel, mt.B, back, 1), slungMatrix(sRel, mt.B, back, 0), ht, 0.1f))
+            }
             if (pk > 0) {
                 val pi = bpInst[pk - 1]
                 if (pi != null) {
@@ -602,7 +665,7 @@ class BattleGame : ApplicationAdapter() {
         }
     }
 
-    private fun slung(base: Matrix4, B: Vector3, type: Int, slot: Int) {
+    private fun slungMatrix(base: Matrix4, B: Vector3, type: Int, slot: Int): Matrix4 {
         val bm = Matrix4(base)
         if (gunCat(type) == 0 || gunCat(type) == 4) {
             // pistol in a holster on the hip
@@ -615,7 +678,7 @@ class BattleGame : ApplicationAdapter() {
             bm.rotate(Vector3.Z, tilt).rotate(Vector3.X, 80f).rotate(Vector3.Z, 90f)
             bm.scale(sc, sc, sc).translate(0f, 0f, 0.2f)
         }
-        drawProp(tpProps[type], bm)
+        return bm
     }
 
     // ------------------------------------------------------------------
@@ -661,32 +724,32 @@ class BattleGame : ApplicationAdapter() {
         return listOf(
             // pistols (cat 0)
             GS("USP", 0, 24f, 0.27f, 15, 1.3f, 140f, false, 1.05f, gc(0.2f, 0.2f, 0.22f), gc(0.8f, 0.8f, 0.85f), 0),
-            GS("GLOCK 19", 0, 20f, 0.24f, 15, 1.2f, 130f, false, 0.95f, gc(0.12f, 0.12f, 0.12f), gc(1f, 0.3f, 0.1f), 0),
+            GS("GLOCK 19", 0, 20f, 0.24f, 15, 1.2f, 130f, false, 0.95f, gc(0.10f, 0.10f, 0.11f), gc(0.22f, 0.22f, 0.24f), 0),
             GS("P320", 0, 21f, 0.25f, 17, 1.25f, 135f, false, 1.0f, gc(0.55f, 0.45f, 0.3f), gc(0.2f, 0.2f, 0.2f), 0),
             GS("M92FS", 0, 22f, 0.27f, 15, 1.3f, 140f, false, 1.1f, gc(0.18f, 0.18f, 0.2f), gc(0.75f, 0.75f, 0.7f), 0),
-            GS("M1911", 0, 34f, 0.35f, 7, 1.4f, 120f, false, 1.0f, gc(0.25f, 0.25f, 0.25f), gc(0.85f, 0.75f, 0.4f), WD),
+            GS("M1911", 0, 34f, 0.35f, 7, 1.4f, 120f, false, 1.0f, gc(0.28f, 0.28f, 0.30f), gc(0.30f, 0.20f, 0.10f), WD),
             // submachine guns (cat 1)
             GS("MP5", 1, 15f, 0.075f, 30, 1.6f, 170f, true, 1.0f, gc(0.12f, 0.12f, 0.13f), gc(0.5f, 0.5f, 0.55f), 0),
-            GS("P90", 1, 14f, 0.065f, 50, 2.0f, 190f, true, 1.0f, gc(0.2f, 0.22f, 0.2f), gc(1f, 0.6f, 0.1f), BP or NS),
-            GS("VECTOR", 1, 17f, 0.055f, 25, 1.5f, 150f, true, 0.9f, gc(0.15f, 0.15f, 0.17f), gc(0.2f, 0.9f, 0.4f), SC or NS),
-            GS("SCORPION", 1, 15f, 0.08f, 30, 1.6f, 160f, true, 1.0f, gc(0.1f, 0.1f, 0.1f), gc(0.9f, 0.9f, 0.9f), 0),
+            GS("P90", 1, 14f, 0.065f, 50, 2.0f, 190f, true, 1.0f, gc(0.30f, 0.27f, 0.20f), gc(0.12f, 0.12f, 0.12f), BP or NS),
+            GS("VECTOR", 1, 17f, 0.055f, 25, 1.5f, 150f, true, 0.9f, gc(0.55f, 0.48f, 0.34f), gc(0.15f, 0.15f, 0.15f), SC or NS),
+            GS("SCORPION", 1, 15f, 0.08f, 30, 1.6f, 160f, true, 1.0f, gc(0.10f, 0.10f, 0.10f), gc(0.30f, 0.30f, 0.30f), 0),
             GS("MP7", 1, 13f, 0.07f, 40, 1.7f, 190f, true, 0.9f, gc(0.25f, 0.27f, 0.22f), gc(0.3f, 0.3f, 0.3f), SC or SU),
             // assault rifles (cat 2)
             GS("M4A1", 2, 24f, 0.09f, 30, 2.0f, 280f, true, 1.0f, gc(0.15f, 0.15f, 0.15f), gc(0.5f, 0.5f, 0.55f), SC),
             GS("AK-47", 2, 30f, 0.1f, 30, 2.1f, 250f, true, 1.0f, gc(0.2f, 0.18f, 0.15f), gc(0.5f, 0.3f, 0.1f), WD or CV),
             GS("SCAR-L", 2, 25f, 0.095f, 30, 2.0f, 290f, true, 1.05f, gc(0.55f, 0.45f, 0.3f), gc(0.2f, 0.2f, 0.2f), SC),
-            GS("HK416", 2, 25f, 0.09f, 30, 2.0f, 300f, true, 1.05f, gc(0.12f, 0.12f, 0.12f), gc(0.3f, 0.6f, 1f), SC),
+            GS("HK416", 2, 25f, 0.09f, 30, 2.0f, 300f, true, 1.05f, gc(0.14f, 0.14f, 0.14f), gc(0.30f, 0.30f, 0.32f), SC),
             GS("FAMAS", 2, 22f, 0.067f, 25, 2.2f, 250f, true, 0.9f, gc(0.25f, 0.3f, 0.2f), gc(0.6f, 0.6f, 0.6f), BP or CH),
             GS("AUG A3", 2, 23f, 0.09f, 30, 2.0f, 280f, true, 0.9f, gc(0.2f, 0.3f, 0.15f), gc(0.2f, 0.2f, 0.2f), BP or SC),
             GS("QBZ-95", 2, 24f, 0.092f, 30, 2.1f, 260f, true, 0.9f, gc(0.3f, 0.3f, 0.25f), gc(0.2f, 0.2f, 0.2f), BP or CH),
             // sniper rifles (cat 3)
-            GS("AWM", 3, 120f, 1.5f, 5, 3.0f, 650f, false, 1.1f, gc(0.2f, 0.25f, 0.15f), gc(0.9f, 0.8f, 0.2f), SC or BI),
-            GS("BARRETT", 3, 115f, 0.9f, 10, 3.2f, 700f, false, 1.1f, gc(0.15f, 0.15f, 0.15f), gc(0.8f, 0.2f, 0.2f), SC or DR or BR or BI),
-            GS("M200", 3, 125f, 1.4f, 7, 3.0f, 750f, false, 1.2f, gc(0.25f, 0.2f, 0.15f), gc(0.9f, 0.8f, 0.2f), SC or BI),
+            GS("AWM", 3, 120f, 1.5f, 5, 3.0f, 650f, false, 1.1f, gc(0.22f, 0.28f, 0.17f), gc(0.10f, 0.10f, 0.10f), SC or BI),
+            GS("BARRETT", 3, 115f, 0.9f, 10, 3.2f, 700f, false, 1.1f, gc(0.16f, 0.16f, 0.16f), gc(0.30f, 0.30f, 0.30f), SC or DR or BR or BI),
+            GS("M200", 3, 125f, 1.4f, 7, 3.0f, 750f, false, 1.2f, gc(0.30f, 0.25f, 0.18f), gc(0.10f, 0.10f, 0.10f), SC or BI),
             GS("SVD", 3, 75f, 0.5f, 10, 2.5f, 500f, false, 1.0f, gc(0.3f, 0.22f, 0.12f), gc(0.5f, 0.3f, 0.1f), SC or WD or DR),
             GS("R700", 3, 100f, 1.2f, 5, 2.8f, 550f, false, 1.0f, gc(0.15f, 0.15f, 0.15f), gc(0.8f, 0.8f, 0.8f), SC or WD),
             // machine pistols (cat 4)
-            GS("G18C", 4, 14f, 0.055f, 33, 1.5f, 120f, true, 0.95f, gc(0.1f, 0.1f, 0.1f), gc(1f, 0.3f, 0.1f), 0),
+            GS("G18C", 4, 14f, 0.055f, 33, 1.5f, 120f, true, 0.95f, gc(0.10f, 0.10f, 0.10f), gc(0.22f, 0.22f, 0.24f), 0),
             GS("VZ.61", 4, 11f, 0.07f, 20, 1.4f, 110f, true, 1.0f, gc(0.3f, 0.3f, 0.32f), gc(0.8f, 0.8f, 0.8f), 0),
             GS("MAC-10", 4, 13f, 0.048f, 30, 1.5f, 100f, true, 0.85f, gc(0.22f, 0.22f, 0.24f), gc(0.6f, 0.6f, 0.6f), 0),
             GS("DESERT EAGLE", 0, 52f, 0.4f, 7, 1.6f, 150f, false, 1.25f, gc(0.7f, 0.7f, 0.72f), gc(0.2f, 0.2f, 0.2f), 0),
@@ -2649,7 +2712,7 @@ class BattleGame : ApplicationAdapter() {
             else if (dropState == 3 && stance == 1) play(pa, if (moving) "CrouchWalk" else "Crouch", if (moving) (pSpeed / 2f).coerceIn(0.6f, 1.5f) else 1f)
             else locoAnim(pa, if (moving) pSpeed else 0f, armedNow)
             pa.ctrl.update(dt)
-            drawActor(pa, eyeP.x, eyeP.y - (if (dropState == 3) eyeH else 1.7f), eyeP.z, pYaw, slots[cur].type, otherType(), armedNow && hp > 0f, flash > 0f, bpLevel)
+            drawActor(pa, eyeP.x, eyeP.y - (if (dropState == 3) eyeH else 1.7f), eyeP.z, pYaw, slots[cur].type, otherType(), armedNow && hp > 0f, flash > 0f, bpLevel, if (reloading && isGun(slots[cur].type)) (1f - reloadT / weapons[slots[cur].type].reload).coerceIn(0f, 1f) else -1f)
         }
         for (b in bots) {
             val bdx = b.pos.x - cam.position.x
