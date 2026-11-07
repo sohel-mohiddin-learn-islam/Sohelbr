@@ -1000,6 +1000,7 @@ class TerrainWorld {
                 val g1 = cb(0.20f * v, 0.42f * v, 0.14f * v)
                 val g2 = cb(0.13f * v, 0.30f * v, 0.10f * v)
                 b.blob(x, y + 0.15f * sc, z, 0.95f * sc, 0.8f * sc, 0.95f * sc, 5, rot, 1f, g1, g2)
+                addCircle(x, z, 0.8f * sc)   // bushes are solid: you can no longer walk through them
             }
         }
     }

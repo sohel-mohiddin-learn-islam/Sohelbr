@@ -108,6 +108,11 @@ class BattleGame : ApplicationAdapter() {
     private val BODY_MULT = 1.0f   // chest / body: normal damage
     private val LEG_MULT = 0.6f    // legs: 60 % damage
 
+    // size of the hit areas (metres): a little generous so phone aiming is not frustrating
+    private val HEAD_R = 0.27f
+    private val BODY_R = 0.40f
+    private val LEG_R = 0.40f
+
     // floating damage numbers (Free Fire style)
     private class DmgPop(val pos: Vector3, val text: String, val zone: Int, val dx: Float) { var age = 0f }
     private val pops = ArrayList<DmgPop>()
@@ -1001,8 +1006,9 @@ class BattleGame : ApplicationAdapter() {
         for (c in cols) allCols.add(c)
         for (sp in gunSpecs()) allCols.add(when (sp.cat) { 0, 4 -> cols[0]; 1 -> cols[1]; 2 -> cols[2]; else -> cols[3] })
         for (c in allCols) {
-            val m = mb.createBox(0.14f, 9f, 0.14f,
-                Material(ColorAttribute.createDiffuse(c), ColorAttribute.createEmissive(c), BlendingAttribute(0.35f)),
+            // a flat glowing ring on the ground (no tall light beam)
+            val m = mb.createCylinder(1.3f, 0.03f, 1.3f, 24,
+                Material(ColorAttribute.createDiffuse(c), ColorAttribute.createEmissive(c), BlendingAttribute(0.45f)),
                 attrs)
             models.add(m)
             beams.add(ModelInstance(m))
@@ -2252,9 +2258,35 @@ class BattleGame : ApplicationAdapter() {
                 recoil = 1f
                 val shootDir = Vector3(cam.direction).nor()
                 if (tpp) {
-                    // aim at whatever is under the crosshair of the third-person camera
+                    // The crosshair belongs to the third-person camera, but bullets leave the player's eye.
+                    // So first find what is under the crosshair (along the camera ray), then shoot from the eye at that spot.
                     val tp = tpCamPos(cam.position)
-                    shootDir.set(tp.add(Vector3(cam.direction).nor().scl(80f)).sub(cam.position)).nor()
+                    val cd = Vector3(cam.direction).nor()
+                    val camRay = Ray(Vector3(tp), cd)
+                    var aimD = wallDist(camRay, 80f)
+                    val vAim = vehRay(camRay, aimD)
+                    if (vAim != null) aimD = vdHit
+                    var aimPt: Vector3? = null
+                    for (b in bots) {
+                        val zc = arrayOf(
+                            Vector3(b.pos.x, b.pos.y + 1.68f, b.pos.z),
+                            Vector3(b.pos.x, b.pos.y + 1.25f, b.pos.z),
+                            Vector3(b.pos.x, b.pos.y + 0.65f, b.pos.z)
+                        )
+                        val zr = floatArrayOf(HEAD_R, BODY_R, LEG_R)
+                        for (k in 0..2) {
+                            if (Intersector.intersectRaySphere(camRay, zc[k], zr[k], null)) {
+                                val along = Vector3(zc[k]).sub(tp).dot(cd)
+                                if (along > 0f && along < aimD) {
+                                    aimD = along
+                                    aimPt = Vector3(tp).add(Vector3(cd).scl(along))   // middle of the part, on the crosshair ray
+                                }
+                                break
+                            }
+                        }
+                    }
+                    val target = aimPt ?: Vector3(tp).add(Vector3(cd).scl(aimD))
+                    shootDir.set(target).sub(cam.position).nor()
                 }
                 val ray = Ray(Vector3(cam.position), shootDir)
                 var maxD = wallDist(ray, def.range)
@@ -2274,18 +2306,18 @@ class BattleGame : ApplicationAdapter() {
                     var zone = 1
                     var zc = tc
                     var d = 0f
-                    if (Intersector.intersectRaySphere(ray, hc, 0.22f, null)) {
+                    if (Intersector.intersectRaySphere(ray, hc, HEAD_R, null)) {
                         hit = true
                         head = true
                         zone = 2
                         zc = hc
                         d = hc.dst(cam.position)
-                    } else if (Intersector.intersectRaySphere(ray, tc, 0.34f, null)) {
+                    } else if (Intersector.intersectRaySphere(ray, tc, BODY_R, null)) {
                         hit = true
                         zone = 1
                         zc = tc
                         d = tc.dst(cam.position)
-                    } else if (Intersector.intersectRaySphere(ray, lc, 0.36f, null)) {
+                    } else if (Intersector.intersectRaySphere(ray, lc, LEG_R, null)) {
                         hit = true
                         zone = 0
                         zc = lc
@@ -2656,21 +2688,27 @@ class BattleGame : ApplicationAdapter() {
             if (dx * dx + dz * dz > 120f * 120f) continue
             val bi = beams[l.kind]
             val lgh = l.y
-            bi.transform.setToTranslation(l.x, lgh + 4.5f, l.z)
+            bi.transform.setToTranslation(l.x, lgh + 0.05f, l.z)
             batch.render(bi, env)
+            // everything lies on the ground (Free Fire style): no floating, no spinning
             val lb = Matrix4()
-            lb.translate(l.x, lgh + 0.95f + 0.12f * sin(gameTime * 2f + l.x), l.z)
-            lb.rotate(Vector3.Y, gameTime * 80f)
+            val lyaw = (l.x * 37f + l.z * 91f) % 360f
             if (isGun(l.kind)) {
+                lb.translate(l.x, lgh + 0.13f, l.z)
+                lb.rotate(Vector3.Y, lyaw)
                 lb.scale(1.5f, 1.5f, 1.5f)
-                drawProp(weaponProps[l.kind], lb)
+                drawProp(tpProps[l.kind], lb)      // gun only, without the first-person arms
             } else if (l.kind in 8..10) {
                 val pi = bpInst[l.kind - 8]
                 if (pi != null) {
-                    pi.transform.set(lb).scale(2.2f, 2.2f, 2.2f).translate(0f, 0f, 0.12f)
+                    lb.translate(l.x, lgh + 0.32f, l.z)
+                    lb.rotate(Vector3.Y, lyaw)
+                    pi.transform.set(lb).scale(2.2f, 2.2f, 2.2f)
                     batch.render(pi, env)
                 }
             } else {
+                lb.translate(l.x, lgh + 0.16f, l.z)
+                lb.rotate(Vector3.Y, lyaw)
                 lb.scale(1.2f, 1.2f, 1.2f)
                 drawProp(itemProps[l.kind - 4], lb)
             }
