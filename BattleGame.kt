@@ -302,6 +302,10 @@ class BattleGame : ApplicationAdapter() {
     private var lookT = 0f
     private var chuteT = 0f
     private var dropPitch = 0f
+    private var inLobby = true
+    private var lobby: Lobby? = null
+    private var lobbyCam: PerspectiveCamera? = null
+    private var lobbyYaw = 0f
     private var stance = 0          // 0 standing, 1 sitting/crouched, 2 prone
     private var eyeH = 1.7f
     private var jumpV = 0f
@@ -1988,6 +1992,42 @@ class BattleGame : ApplicationAdapter() {
         return "%d:%02d".format(s / 60, s % 60)
     }
 
+    private fun renderLobby(w: Float, h: Float, dt: Float) {
+        val lb = lobby ?: Lobby(font, sb, shapes, LocalLobbyService()).also { lobby = it }
+        Gdx.gl.glViewport(0, 0, Gdx.graphics.width, Gdx.graphics.height)
+        Gdx.gl.glClearColor(0.05f, 0.08f, 0.12f, 1f)
+        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
+        val pa = pActor
+        if (pa != null && humansOk) {
+            val lc = lobbyCam ?: PerspectiveCamera(40f, w, h).also { lobbyCam = it }
+            lc.viewportWidth = w
+            lc.viewportHeight = h
+            lc.near = 0.1f
+            lc.far = 60f
+            // camera is shifted to the right so the soldier stands on the left side of the screen
+            lc.position.set(1.15f, 1.2f, 4.0f)
+            lc.lookAt(1.15f, 1.0f, 0f)
+            lc.up.set(0f, 1f, 0f)
+            lc.update()
+            lobbyYaw += dt * 18f
+            play(pa, "Idle", 1f)
+            pa.ctrl.update(dt)
+            batch.begin(lc)
+            drawActor(pa, 0f, 0f, 0f, 15f + sin(lobbyYaw * 0.05f) * 25f, slots[0].type, -1, true, false)
+            batch.end()
+        }
+        Gdx.gl.glDisable(GL20.GL_DEPTH_TEST)
+        Gdx.gl.glEnable(GL20.GL_BLEND)
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
+        val go = lb.draw(w, h, dt)
+        Gdx.gl.glDisable(GL20.GL_BLEND)
+        Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
+        if (go) {
+            inLobby = false
+            restart()
+        }
+    }
+
     private fun centered(text: String, y: Float, w: Float) {
         layout.setText(font, text)
         font.draw(sb, text, (w - layout.width) / 2f, y)
@@ -2011,6 +2051,11 @@ class BattleGame : ApplicationAdapter() {
             taps.clear()
             loadStep()
             drawLoading(w, h)
+            return
+        }
+        if (inLobby) {
+            taps.clear()
+            renderLobby(w, h, dt)
             return
         }
 
@@ -2092,7 +2137,10 @@ class BattleGame : ApplicationAdapter() {
 
         if (over) {
             taps.clear()
-            if (Gdx.input.justTouched()) restart()
+            if (Gdx.input.justTouched()) {
+                inLobby = true
+                lobbyYaw = 0f
+            }
         } else {
             if (mapOpen) handleMapInput(w, h)
             for (i in 0..2) {
