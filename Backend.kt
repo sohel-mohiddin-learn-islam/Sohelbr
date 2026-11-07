@@ -11,8 +11,8 @@ import com.badlogic.gdx.utils.JsonValue
  * While they are empty the game works fully offline and the admin features are simply switched off.
  */
 object BackendConfig {
-    const val PROJECT_ID = ""
-    const val API_KEY = ""
+    const val PROJECT_ID = "sohelbr-73c46"
+    const val API_KEY = "AIzaSyAatdMvRVTpLwbaWTYVnvvKtTt4Mo2udBU"
     const val DB = "(default)"
 }
 
